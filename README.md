@@ -39,18 +39,18 @@ The PanTEon Database is publicly available at:
 PanTEon includes a modular software framework that enables users to apply state-of-the-art machine learning and deep learning approaches to transposable element analysis. The software is organized into complementary modules:
 
 * Training Module
-* * Allows users to train one or multiple ML/DL models simultaneously from a FASTA file
-* * Supports custom classification schemes, enabling classification beyond standard TE hierarchies
-* * Facilitates fair comparison across different algorithms using the same training data
+  * Allows users to train one or multiple ML/DL models simultaneously from a FASTA file
+  * Supports custom classification schemes, enabling classification beyond standard TE hierarchies
+  * Facilitates fair comparison across different algorithms using the same training data
 
 * Inference Module
-* * Performs TE classification using one or multiple trained models (up to nine architectures in parallel)
+  * Performs TE classification using one or multiple trained models (up to nine architectures in parallel)
   * Enables ensemble-based predictions and model comparison
 
 * Library Construction Module
-* * Generates custom TE libraries tailored to specific analytical needs
-* * Supports filtering by taxonomic level (kingdom, phylum, class, order, family, or species)
-* * Supports filtering by TE classification level (class, order, or superfamily)
+  * Generates custom TE libraries tailored to specific analytical needs
+  * Supports filtering by taxonomic level (kingdom, phylum, class, order, family, or species)
+  * Supports filtering by TE classification level (class, order, or superfamily)
 
 This functionality is particularly useful for reducing the computational cost of genome annotation, as annotating genomes with very large TE libraries can be prohibitively expensive. PanTEon enables users to extract only the relevant subset of TEs, optimizing both accuracy and performance.
 
@@ -62,7 +62,7 @@ This functionality is particularly useful for reducing the computational cost of
 We highly recommend to use and install Python packages within an Anaconda environment. First, download the lastest version of PanTEon
 
 ```
-git clone https://github.com/simonorozcoarias/Inpactor2.git
+git clone https://github.com/simonorozcoarias/PanTEon.git
 ```
 Go to the PanTEon folder and find the file named "PanTEon_env.yml". Then, install the environment: 
 ```
