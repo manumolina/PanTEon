@@ -105,19 +105,13 @@ usage: PanTEon.py training [-h] -f FASTA [-w WORK_DIR] -t THREADS [-n MODELS] -d
 ```
 
 options:
-  -h, --help            show this help message and exit
-  -f FASTA, --fasta FASTA
-                        Path to the TE fasta file
-  -w WORK_DIR, --work-dir WORK_DIR
-                        Path to the working directory
-  -t THREADS, --threads THREADS
-                        Number of threads to be used
-  -n MODELS, --models MODELS
-                        Models to be used (comma-separated). Options=All, NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2
-  -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY
-                        Directory where models will be stored during training
-  -z MIN_PROB, --min_prob MIN_PROB
-                        Minimum probability to classify a TE
+* -h, --help: show this help message and exit
+* -f FASTA, --fasta FASTA: Path to the TE fasta file
+* -w WORK_DIR, --work-dir WORK_DIR: Path to the working directory
+* -t THREADS, --threads THREADS: Number of threads to be used
+* -n MODELS, --models MODELS: Models to be used (comma-separated). Options=All, NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2
+* -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY:Directory where models will be stored during training
+* -z MIN_PROB, --min_prob MIN_PROB: Minimum probability to classify a TE
 
 It is highly recommended to create and use an output directory in each execution to avoid the substitution of result files from different runs of PanTEon.
 
@@ -127,21 +121,14 @@ usage: PanTEon.py inference [-h] -f FASTA -t THREADS -w WORK_DIR [-n MODELS] -d 
 ```
 
 options:
-  -h, --help            show this help message and exit
-  -f FASTA, --fasta FASTA
-                        Path to the TE fasta file
-  -t THREADS, --threads THREADS
-                        Number of threads to be used
-  -w WORK_DIR, --work-dir WORK_DIR
-                        Path to the working directory
-  -n MODELS, --models MODELS
-                        Models to be used (comma-separated). Options=All, NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2
-  -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY
-                        Directory containing trained models
-  -p PREFIX, --prefix PREFIX
-                        Prefix for the output results
-  -z MIN_PROB, --min_prob MIN_PROB
-                        Minimum probability to classify a TE
+* -h, --help: show this help message and exit
+* -f FASTA, --fasta FASTA: Path to the TE fasta file
+* -t THREADS, --threads THREADS: Number of threads to be used
+* -w WORK_DIR, --work-dir WORK_DIR: Path to the working directory
+* -n MODELS, --models MODELS: Models to be used (comma-separated). Options=All, NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2
+* -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY: Directory containing trained models
+* -p PREFIX, --prefix PREFIX: Prefix for the output results
+* -z MIN_PROB, --min_prob MIN_PROB: Minimum probability to classify a TE. By default 0.6
 
 ### Library
 ```
@@ -149,26 +136,21 @@ usage: PanTEon.py library [-h] [--taxon TAXON] [--req_class REQ_CLASS] [--view_o
 ```
 
 options:
-  -h, --help            show this help message and exit
-  --taxon TAXON         Taxon name (e.g., Plantae, Chordata, etc.)
-  --req_class REQ_CLASS
-                        Classification name (e.g., ClassI, LTR, Helitron, etc.)
-  --view_only           Only print report (do not write FASTA)
+* -h, --help: show this help message and exit
+* --taxon TAXON: Taxon name (e.g., Plantae, Chordata, etc.)
+* --req_class REQ_CLASS: Classification name (e.g., ClassI, LTR, Helitron, etc.)
+* --view_only: Only print report (do not write FASTA)
 
 ### Evaluation
 usage: PanTEon.py evaluation [-h] --true_fasta TRUE_FASTA --pred_fasta PRED_FASTA [--level LEVEL] [--out_confusion OUT_CONFUSION] [--out_report OUT_REPORT]
 
 options:
-  -h, --help            show this help message and exit
-  --true_fasta TRUE_FASTA
-                        FASTA with ground truth classifications.
-  --pred_fasta PRED_FASTA
-                        FASTA with predicted classifications.
-  --level LEVEL         Level (1=A, 2=B, 3=C) to extract the class from ID#A/B/C. By default -1 (last level).
-  --out_confusion OUT_CONFUSION
-                        Output CSV for the confusion matrix.
-  --out_report OUT_REPORT
-                        Output CSV for the classification report.
+* -h, --help: show this help message and exit
+* --true_fasta TRUE_FASTA: FASTA with ground truth classifications.
+* --pred_fasta PRED_FASTA: FASTA with predicted classifications.
+* --level LEVEL: Level (1=A, 2=B, 3=C) to extract the class from ID#A/B/C. By default -1 (last level).
+* --out_confusion OUT_CONFUSION: Output CSV for the confusion matrix.
+* --out_report OUT_REPORT: Output CSV for the classification report.
 
 ## Supported TE tasks                        
 
