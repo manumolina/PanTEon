@@ -153,14 +153,16 @@ options:
 * --out_report OUT_REPORT: Output CSV for the classification report.
 
 ## Supported TE tasks                        
-PanTEon was designed as a standardized and modular platform covering the full spectrum of TE analysis, from detection from genomes to curated TE libraries and annotations, while explicitly enabling the simultaneous training, inference, and comparison of multiple machine learning and deep learning models, and users can seamlessly integrate their own custom neural networks into the framework.
+PanTEon was designed as a standardized and modular platform covering the full spectrum of TE analysis, from detection from genomes to curated TE libraries and annotations, while explicitly enabling the simultaneous training, inference, and comparison of multiple machine learning and deep learning models. PanTEon also allows users to seamlessly integrate their own custom neural networks into the framework.
 
 **TE Identification**
 
 What it does
+
 The identification task focuses on detecting candidate TE sequences and their genomic coordinates, providing the initial input for downstream analysis.
 
 How it is performed in PanTEon (--identification parameter)
+
 Within PanTEon, inputs required to perform the identification are:
 * a fasta file containing long sequences containing (or not) TEs.
 * A GFF file with the coordinate information of each TE inserted into the sequences contained in the fasta file (training module only)
@@ -176,9 +178,11 @@ Which ML/DL approaches are integrated into PanTEon
 **TE Classification**
 
 What it does
+
 TE classification assigns curated sequences to hierarchical TE categories such as class, order, superfamily, or any user-defined classification scheme (e.g. TEs vs non-TEs, chimeric sequences vs intact sequences).
 
 How it is performed in PanTEon (--classification parameter)
+
 Within PanTEon, inputs required to perform the classification are:
 * a fasta file containing sequences, with the classification integrated into the IDs (after a "#" symbol).
 
@@ -203,9 +207,11 @@ Which ML/DL approaches are integrated into PanTEon
 **TE trimming**
 
 What it does
+
 This task focuses on finding the correct TE ends in a longer sequences, in the case of over-extended or chimeric sequences.
 
 How it is performed in PanTEon (--trimming parameter)
+
 Within PanTEon, inputs required to perform the classification are:
 * a fasta file containing sequences, with the correct starting and ending positions (between 0-1) integrated into the IDs, separated by "_" symbol (e.g. Sequence1_500_5500).
 
@@ -217,7 +223,7 @@ The PanTEon's output are:
 * a CSV fil containing the predicted starting and ending positions per sequence provided by each trained algorithm (inference module only)
 
 Which ML/DL approaches are integrated into PanTEon
-* No approach have been developed to date to tack this task
+* Auto-trimming (Galeote et al., 2024)
 
 ## References
 * Orozco-Arias, S., Liu, J., Tabares-Soto, R., Ceballos, D., Silva Domingues, D., Garavito, A., ... & Guyot, R. (**2018**). Inpactor, integrated and parallel analyzer and classifier of LTR retrotransposons and its application for pineapple LTR retrotransposons diversity and dynamics. Biology, 7(2), 32.
