@@ -153,13 +153,73 @@ options:
 * --out_report OUT_REPORT: Output CSV for the classification report.
 
 ## Supported TE tasks                        
+PanTEon was designed as a standardized and modular platform covering the full spectrum of TE analysis, from detection from genomes to curated TE libraries and annotations, while explicitly enabling the simultaneous training, inference, and comparison of multiple machine learning and deep learning models, and users can seamlessly integrate their own custom neural networks into the framework.
 
+**TE Identification**
 
+What it does
+The identification task focuses on detecting candidate TE sequences and their genomic coordinates, providing the initial input for downstream analysis.
 
+How it is performed in PanTEon (--identification parameter)
+Within PanTEon, inputs required to perform the identification are:
+* a fasta file containing long sequences containing (or not) TEs.
+* A GFF file with the coordinate information of each TE inserted into the sequences contained in the fasta file (training module only)
 
+The PanTEon's output are:
+* A set of trained models inside a directory (specified by the -d parameter; training module only)
+* A directory with several training plots for each trained ML/DL algorithm (training module only)
+* a GFF containing the predicted coordinates for all detected TEs (inference module only)
+
+Which ML/DL approaches are integrated into PanTEon
+* No approach have been developed to date to tack this task
+
+**TE Classification**
+
+What it does
+TE classification assigns curated sequences to hierarchical TE categories such as class, order, superfamily, or any user-defined classification scheme (e.g. TEs vs non-TEs, chimeric sequences vs intact sequences).
+
+How it is performed in PanTEon (--classification parameter)
+Within PanTEon, inputs required to perform the classification are:
+* a fasta file containing sequences, with the classification integrated into the IDs (after a "#" symbol).
+
+The PanTEon's output are:
+* A set of trained models inside a directory (specified by the -d parameter; training module only)
+* A directory with several training plots for each trained ML/DL algorithm (training module only)
+* a merged report summaring the performance of all the trained algorithms (training module only)
+* a fasta file with the sequences and the predicted classifications (inference module only)
+* a CSV fil containing the predicted classification per sequence provided by each trained algorithm (inference module only)
+
+Which ML/DL approaches are integrated into PanTEon
+* BERTE (Y. Chen et al., 2024)
+* CREATE (Qi et al., 2025)
+* ClassifyTE (Panta et al., 2021)
+* DeepTE (Yan et al., 2020)
+* Inpactor2_Class (Orozco-Arias et al,. 2023)
+* NeuralTE (Hu et al., 2024)
+* TEClass2 (Bickmann et al., 2023)
+* TERL (da Cruz et al., 2021)
+* Terrier (Turnbull et al., 2025b)
+
+**TE trimming**
+
+What it does
+This task focuses on finding the correct TE ends in a longer sequences, in the case of over-extended or chimeric sequences.
+
+How it is performed in PanTEon (--trimming parameter)
+Within PanTEon, inputs required to perform the classification are:
+* a fasta file containing sequences, with the correct starting and ending positions (between 0-1) integrated into the IDs, separated by "_" symbol (e.g. Sequence1_500_5500).
+
+The PanTEon's output are:
+* A set of trained models inside a directory (specified by the -d parameter; training module only)
+* A directory with several training plots for each trained ML/DL algorithm (training module only)
+* a merged report summaring the performance of all the trained algorithms (training module only)
+* a fasta file with the trimming sequences (inference module only)
+* a CSV fil containing the predicted starting and ending positions per sequence provided by each trained algorithm (inference module only)
+
+Which ML/DL approaches are integrated into PanTEon
+* No approach have been developed to date to tack this task
 
 ## References
-
 * Orozco-Arias, S., Liu, J., Tabares-Soto, R., Ceballos, D., Silva Domingues, D., Garavito, A., ... & Guyot, R. (**2018**). Inpactor, integrated and parallel analyzer and classifier of LTR retrotransposons and its application for pineapple LTR retrotransposons diversity and dynamics. Biology, 7(2), 32.
 * Orozco-Arias, S., Isaza, G., & Guyot, R. (**2019**). Retrotransposons in plant genomes: structure, identification, and classification through bioinformatics and machine learning. International journal of molecular sciences, 20(15), 3837.
 * Orozco-Arias, S., Isaza, G., Guyot, R., & Tabares-Soto, R. (**2019**). A systematic review of the application of machine learning in the detection and classification of transposable elements. PeerJ, 7, e8311.
