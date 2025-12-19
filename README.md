@@ -1,6 +1,7 @@
 <p align="left">
   <img src="https://github.com/simonorozcoarias/PanTEon/blob/main/Figures/panteon.png">
 </p>
+
 # Deep Learning Framework for Transposable Element Discovery and Annotation
 
 ## Table of Contents  
