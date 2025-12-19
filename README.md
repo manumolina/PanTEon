@@ -226,28 +226,24 @@ Which ML/DL approaches are integrated into PanTEon
 * Auto-trimming (Galeote et al., 2024)
 
 ## References
-* Orozco-Arias, S., Liu, J., Tabares-Soto, R., Ceballos, D., Silva Domingues, D., Garavito, A., ... & Guyot, R. (**2018**). Inpactor, integrated and parallel analyzer and classifier of LTR retrotransposons and its application for pineapple LTR retrotransposons diversity and dynamics. Biology, 7(2), 32.
-* Orozco-Arias, S., Isaza, G., & Guyot, R. (**2019**). Retrotransposons in plant genomes: structure, identification, and classification through bioinformatics and machine learning. International journal of molecular sciences, 20(15), 3837.
-* Orozco-Arias, S., Isaza, G., Guyot, R., & Tabares-Soto, R. (**2019**). A systematic review of the application of machine learning in the detection and classification of transposable elements. PeerJ, 7, e8311.
-* Orozco-Arias, S., Piña, J. S., Tabares-Soto, R., Castillo-Ossa, L. F., Guyot, R., & Isaza, G. (**2020**). Measuring performance metrics of machine learning algorithms for detecting and classifying transposable elements. Processes, 8(6), 638.
-* Orozco-Arias, S., Jaimes, P. A., Candamil, M. S., Jiménez-Varón, C. F., Tabares-Soto, R., Isaza, G., & Guyot, R. (**2021**). InpactorDB: a classified lineage-level plant LTR retrotransposon reference library for free-alignment methods based on machine learning. Genes, 12(2), 190.
-* Orozco-Arias, S., Candamil-Cortés, M. S., Jaimes, P. A., Piña, J. S., Tabares-Soto, R., Guyot, R., & Isaza, G. (**2021**). K-mer-based machine learning method to classify LTR-retrotransposons in plant genomes. PeerJ, 9, e11456.
-* Orozco-Arias, S., Candamil-Cortes, M. S., Jaimes, P. A., Valencia-Castrillon, E., Tabares-Soto, R., Guyot, R., & Isaza, G. (**2021**). Deep Neural Network to Curate LTR Retrotransposon Libraries from Plant Genomes. In International Conference on Practical Applications of Computational Biology & Bioinformatics (pp. 85-94). Springer, Cham.
-* Orozco-Arias, S., Candamil-Cortés, M. S., Valencia-Castrillón, E., Jaimes, P. A., Tobón Orozco, N., Arias-Mendoza, M., Tabares-Soto, R., Guyot, R., & Isaza, G. (**2021**). SENMAP: A Convolutional Neural Network Architecture for Curation of LTR-RT Libraries from Plant Genomes. In 2021 IEEE 2nd International Congress of Biomedical Engineering and Bioengineering (CI-IB&BI) (pp. 1-4). IEEE.
-* Orozco-Arias, S., Candamil-Cortes, M. S., Jaimes, P. A., Valencia-Castrillon, E., Tabares-Soto, R., Isaza, G., & Guyot, R. (**2022**). Automatic curation of LTR retrotransposon libraries from plant genomes through machine learning. Journal of Integrative Bioinformatics.
-* Orozco-Arias, S., Lopez-Murillo, L. H., Piña, J. S., Valencia-Castrillon, E., Tabares-Soto, R., Castillo-Ossa, L., Isaza, G., & Guyot, R. (**2023**). Genomic object detection: An improved approach for transposable elements detection and classification using convolutional neural networks. Plos one, 18(9), e0291925.
-* Orozco-Arias, S., Gaviria-Orrego, S., Tabares-Soto, R., Isaza, G., & Guyot, R. (**2023**). InpactorDB: A Plant LTR Retrotransposon Reference Library. In Plant Genomic and Cytogenetic Databases (pp. 31-44). New York, NY: Springer US.
+If you use any of the ML/DL algorithms integrated into PanTEon, please cite them as following:
+* Chen, Y., Qi, Y., Wu, Y., Zhang, F., Liao, X., & Shang, X. (2024). BERTE: High-precision hierarchical classification of transposable elements by a transfer learning method with BERT pre-trained model and convolutional neural network. BioRxiv, 2024-01.
+* Qi, Y., Chen, Y., Wu, Y., Guo, Y., Gao, M., Zhang, F., Liao, X., & Shang, X. (2025). CREATE: a novel attention-based framework for efficient classification of transposable elements. Briefings in Bioinformatics, 26(6), bbaf608.
+* Panta, M., Mishra, A., Hoque, M. T., & Atallah, J. (2021). ClassifyTE: a stacking-based prediction of hierarchical classification of transposable elements. Bioinformatics, 37(17), 2529-2536.
+* Yan, H., Bombarely, A., & Li, S. (2020). DeepTE: a computational method for de novo classification of transposons with convolutional neural network. Bioinformatics, 36(15), 4269-4275.
+* Orozco-Arias, S., Humberto Lopez-Murillo, L., Candamil-Cortés, M. S., Arias, M., Jaimes, P. A., Rossi Paschoal, A., Tabares-Soto, R., Isaza, G., & Guyot, R. (2022). Inpactor2: a software based on deep learning to identify and classify LTR-retrotransposons in plant genomes. Briefings in Bioinformatics.
+* Hu, K., Xu, M., Gao, X., & Wang, J. (2024). NeuralTE: an accurate approach for Transposable Element superfamily classification with multi-feature fusion. Proceedings of the 15th ACM International Conference on Bioinformatics, Computational Biology and Health Informatics, 1-10.
+* Bickmann, L., Rodriguez, M., Jiang, X., & Makalowski, W. (2023). TEclass2: Classification of transposable elements using Transformers. BioRxiv, 2023-10.
+* da Cruz, M. H. P., Domingues, D. S., Saito, P. T. M., Paschoal, A. R., & Bugatti, P. H. (2021). TERL: classification of transposable elements by convolutional neural networks. Briefings in bioinformatics, 22(3), bbaa185.
+* Turnbull, R., Young, N. D., Tescari, E., Skerratt, L. F., & Kosch, T. A. (2025). Terrier: A deep learning repeat classifier. Briefings in Bioinformatics, 26(4), bbaf442.
+
+Other resources used in this work:
+* Storer, J., Hubley, R., Rosen, J., Wheeler, T. J., & Smit, A. F. (2021). The Dfam community resource of transposable element families, sequence models, and genome annotations. Mobile DNA, 12(1), 1-14.
+* Flynn, J. M., Hubley, R., Goubert, C., Rosen, J., Clark, A. G., Feschotte, C., & Smit, A. F. (2020). RepeatModeler2 for automated genomic discovery of transposable element families. Proceedings of the National Academy of Sciences, 117(17), 9451-9457.
+* Orozco-Arias, S., Sierra, P., Durbin, R., & González, J. (2024). MCHelper automatically curates transposable element libraries across eukaryotic species. Genome Research, 34(12), 2256-2268.
+* Pedro, D. L. F., Amorim, T. S., Varani, A., Guyot, R., Domingues, D. S., & Paschoal, A. R. (2021). An atlas of plant transposable elements. F1000Research, 10, 1194.
+* Martin, F. J., Amode, M. R., Aneja, A., Austine-Orimoloye, O., Azov, A. G., Barnes, I., Becker, A., Bennett, R., Berry, A., Bhai, J., & others. (2023). Ensembl 2023. Nucleic acids research, 51(D1), D933-D941.
 
 ## Citation
-if you use this software, or any part of it (as the neural network architectures, functions, etc), please cite us as following:
-
-* Orozco-Arias, S., Humberto Lopez-Murillo, L., Candamil-Cortés, M. S., Arias, M., Jaimes, P. A., Rossi Paschoal, A., Tabares-Soto, R., Isaza, G., & Guyot, R. (2022). Inpactor2: a software based on deep learning to identify and classify LTR-retrotransposons in plant genomes. Briefings in Bioinformatics.
-
-| Species | Genome size (Mb)  | Number of LTR-RTs | Time (Sec) | Max Ram used (Gb) | Max disk usage (Mb) |
-| :------------: |:---------------:| :-----:| :-----:|  :-----:|  :-----:| 
-| A. thaliana | 115 | 107 | 179.60 | 0.86 | 571.48 |
-| O. sativa | 358 | 1090 | 328.54 | 3.00 | 1794.81 |
-| C. canephora | 553 | 730 | 345.12 | 5.07 | 2718.68 |
-| S. lycopersicum | 791 | 1401 | 855.31 | 8.87 | 4641.29 |
-| C. arabica | 1126.4 | 3656 | 1568.59 | 9.97 | 5610.94 |
-| Z. mays | 2150.4 | 35,274 | 10,512.24 | 24.80 | 10,487.07 |
+if you use this framework, the database or any part of it (as the neural network architectures, functions, etc), please cite us as following:
+* Orozco-Arias, S., Ferrer-Pomer, I., Rodrigues de Goes, F., Gaviria-Orrego, S., Paschoal, A. R., Guyot, R., Gabaldon, T. (2026) Cross-kingdom deep learning framework guides the future design of transposable element classifiers. BioRxiv, 2026-01.
