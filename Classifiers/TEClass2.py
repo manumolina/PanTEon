@@ -1,0 +1,1079 @@
+# -*- coding: utf-8 -*-
+from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, recall_score, precision_score, \
+    classification_report, precision_recall_fscore_support
+import pandas as pd
+import matplotlib.pyplot as plt
+from Bio import SeqIO
+import numpy as np
+import os, sys, tensorflow as tf
+os.environ["KERAS_BACKEND"] = "tensorflow"
+import tf_keras as keras
+sys.modules["keras"] = keras
+os.environ.setdefault("NCCL_DEBUG", "WARN")              # INFO si quieres más verbosidad
+os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
+import math
+from tqdm import tqdm
+import seaborn as sn
+import pickle
+import tokenizers
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
+from torch.utils.data import Dataset
+import torch
+import random
+import transformers
+from transformers import Trainer, TrainingArguments, LongformerConfig
+from transformers import LongformerForSequenceClassification, AutoModelForSequenceClassification
+from math import pi
+from torchvision import transforms
+torch.autograd.set_detect_anomaly(True)
+global model
+from transformers.trainer_utils import get_last_checkpoint
+import torch.distributed as dist
+import time
+
+# ====================
+# MÉTRICAS PERSONALIZADAS
+# ====================
+#holds the likeability of specific SNPs for each AGTC/AGTC mapping
+snp_matrix = [[0,1,1,1],    #A
+              [1,0,1,1],    #G
+              [1,1,0,1],    #T
+              [1,1,1,0],    #C
+              [1,1,1,1]]    #ambuigity N will be mapped to AGTC
+
+#define the mappings as literal dor each base
+base2key_map = {'A':0 , 'G': 1, 'T':2, 'C':3, 'N':4}
+key2base_map = {0:'A' , 1:'G', 2:'T', 3:'C', 'N':4}
+
+#define the complement for each base
+complement_map = {ord('G'):'C', ord('T'):'A', ord('C'):'G', ord('A'):'T', ord('N'):'N'}
+complement_map_int = {ord('0'):'A', ord('1'):'G', ord('2'):'T', ord('3'):'C', ord('4'):'N'}
+
+superf_dict = {'LTR': 0, 'COPIA': 1, 'GYPSY': 2, 'ERV': 3, 'BELPAO': 4, 'LINE': 5, 'I': 6, 'L1': 7,
+                       'RTE': 8, 'DIRS': 9, 'PLE': 10, 'SINE': 11, 'TRNA': 12, 'HELITRON': 13, 'CRYPTON': 14,
+                       'HAT': 15, 'MERLIN': 16, 'P': 17, 'TIR': 18, 'TC1MARINER': 19, 'MULE': 20,
+                       'PIFHARBINGER': 21, 'CACTA': 22, 'PIGGYBAC': 23, 'CR1': 24, 'R1': 25, 'LARD': 26, 'ALU': 27,
+                       'KOLOBOK': 28, 'ACADEM-1': 29}
+
+
+class TransposonDataset(Dataset):
+    '''
+        Pytorch Dataset for handling the created written transposon dataset
+        embedd_larger_seq: If True use dilated kmers which reduces the sequence impact up to w times
+        train: Wheter to apply augmentation
+    '''
+
+    def __init__(self, data, datadict_, tokenizer, embedd_larger_seq=True, train=False):
+        # save original sequences
+        self.seqs = [seq[0] for seq in data]
+
+        # save sequence ids
+        self.ids = [id[1] for id in data]
+
+        # save kmer embeddings and embedding_with when kmers are dilated
+        embeddings = [seq2kmer(seq[0], embedd_larger_seq) for seq in data]
+        kmers, embed_w = [kmer[0] for kmer in embeddings], [kmer[1] for kmer in embeddings]
+        self.embed_w = embed_w
+
+        # tokenize kmer into ids and attention masks
+        # tokenized_input = [tokenizer.encode(kmer) for kmer in kmers]
+        # self.encoded_kmers = [enc_ids.ids for enc_ids in tokenized_input]
+        # self.attention_masks = [att_mask.attention_mask for att_mask in tokenized_input]
+
+        self.global_att_tokens = np.array([0, 256, 512])
+        self.beta = 1.0
+
+        # save labels
+        self.labels = [label[2] for label in data]
+
+        # save additional parameters
+        self.tokenizer = tokenizer
+        self.train = train
+
+        sample_weight = []
+        eps = 0
+        if len(datadict_.keys()) > 1: # Do it only for training, no for inference
+            for i in range(len(datadict_.keys())):
+                sample_weight.append(self.labels.count(i) + eps)
+
+            """# Debug
+            print("num_classes:", num_classes if "num_classes" in locals() else "NA")
+            print("sample_weight (raw):", sample_weight)
+            print("sum(sample_weight):", sum(sample_weight))
+            print("min(sample_weight):", min(sample_weight), "max(sample_weight):", max(sample_weight))"""
+
+            self.sample_weight = [1 / ((x / sum(sample_weight)) )  for x in sample_weight]  # get inverse of occurence weigths -> large occurences weigth less
+            # self.sample_weight = [x / sum(self.sample_weight) for x in self.sample_weight] #additional normalization to 0-1
+        else:
+            self.sample_weight = np.ones(1, dtype=np.float32)
+        self.sample_weight = torch.tensor(self.sample_weight)
+
+        uniform = torch.tensor(1 / len(datadict_.keys()))
+        uniform = uniform.repeat(len(datadict_.keys()))
+        self.sample_weight = self.beta * self.sample_weight + (1 - self.beta) * uniform
+
+        print("[INFO] dataset size: ", len(self.labels))
+
+    def getembedding_w(self, idx):
+        embed_w = self.embed_w[idx]
+        return embed_w
+
+    def getoriginalseq(self, idx):
+        return self.seqs[idx], self.ids[idx]
+
+    def getseqids(self):
+        return self.ids
+
+    def getkmer(self, seq_index, kmer_pos):
+        seq = self.seqs[seq_index]
+
+        if kmer_pos >= len(seq2kmer(seq)[0].split()):
+            return '[PAD]'  # attention on padding
+
+        kmer = seq2kmer(seq)[0].split()[kmer_pos]
+        return kmer
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        label = self.labels[idx]
+        seq = self.seqs[idx]
+
+        # kmers = self.encoded_kmers[idx]
+        # att_mask = self.attention_masks[idx]
+
+        # Apply augmentation
+        # define a composed transformation list which are used for each sequence
+        transform = transforms.Compose([normalize(), mask(), compose_([insertion(max_length=7), identity()]),
+                                        compose_([deletion(n=1, max_length=7), identity()]),
+                                        compose_([repeat(), identity()]),
+                                        compose_([complement(), reverse(), reverse_complement(), identity()]),
+                                        compose_([add_tail(), remove_tail(), identity()])
+                                        ])
+
+        if self.train and random.random() > 1 - 0.55:
+            seq = transform(seq)
+
+        kmers = seq2kmer(seq)[0]
+        encoded_input = self.tokenizer.encode(kmers)
+        kmers = encoded_input.ids
+        att_mask = encoded_input.attention_mask
+
+        # generate global attention mask
+        global_att_mask = torch.zeros_like(torch.tensor(att_mask), dtype=torch.long)  # , device=att_mask.device)
+        global_att_tokens = self.global_att_tokens[self.global_att_tokens <= len(kmers)]
+        global_att_mask[global_att_tokens] = 1  # global attentions
+
+        return {"input_ids": kmers, "attention_mask": att_mask, "global_attention_mask": global_att_mask,
+                "labels": label}
+
+
+class normalize(object):
+    '''
+        Uppercases all characters and removes all bases not in base2key_map to 'N'
+    '''
+    def __call__(self, seq):
+        seq = seq.upper()
+        if not all(s in base2key_map for s in seq):
+            replace_chars = [char for char in seq if char not in base2key_map.keys()]
+            replace_chars = list(dict.fromkeys(replace_chars))
+            for c in replace_chars:
+                seq = seq.replace(c, 'N')
+        return seq
+
+
+class snp(object):
+    '''
+        creates a number of n SNPs based upon the likeability matrix on the given seq
+        Does NOT introucde ambuigity (AGTCN -> AGTC)
+    '''
+
+    def __init__(self, n=1, matrix=snp_matrix):
+        self.n = n
+        self.snp_matrix = matrix
+
+    def __call__(self, seq):
+        for i in range(self.n):
+            j = random.randint(0, len(seq) - 1)
+            snp_ = base2key_map[seq[j]]
+            snp_ = self.snp_matrix[snp_] * np.random.rand(4)
+            snp_ = key2base_map[int(snp_.max())]
+            seq = seq[:j] + snp_ + seq[j + 1:]
+        return seq
+
+
+class mask(object):
+    '''
+        Masks n times a sequence of 'length' concurrent characters into ambuigity character N (AGTCN -> N)
+        Note that this mask is NOT equal to masking with ['MSK']-token during tokenization. They have different purposes.
+    '''
+
+    def __init__(self, n=1, length=5, pos=[0.05, 0.95]):
+        self.n = n
+        self.length = length
+        self.pos = pos
+
+    def __call__(self, seq):
+        for i in range(self.n):
+            j = int(random.uniform(*self.pos) * len(seq))
+            mask_ = 'N' * self.length
+            seq = seq[:j] + mask_ + seq[j + self.length:]
+        return seq
+
+
+class insertion(object):
+    '''
+        Inserts a random sequence (insert_seq=None) of length in [min_lentgh, max_length] at a random position.
+        A specified sequence can also be inserted; the length is then omitted
+    '''
+
+    def __init__(self, min_length=5, max_length=20, pos=[0.05, 0.95], insert_seq=None):
+        self.min_length = min_length
+        self.max_length = max_length
+        self.insert_seq = insert_seq
+        self.pos = pos
+
+    def __call__(self, seq):
+        j = int(random.uniform(*self.pos) * len(seq))
+        if self.insert_seq:
+            insert_ = self.insert_seq
+        else:
+            ##create random sequence
+            length = random.randint(self.min_length, self.max_length)
+            rand_list = random.choices(range(0, 3), k=length)
+            rand_list = "".join(str(e) for e in rand_list)
+            insert_ = rand_list.translate(complement_map_int)
+        return seq[:j] + insert_ + seq[j:]
+
+
+class deletion(object):
+    '''
+        Deletes n times a subsequence of 'length' concurrent characters
+    '''
+
+    def __init__(self, n=1, min_length=5, max_length=20, pos=[0.05, 0.95]):
+        self.n = n
+        self.min_length = min_length
+        self.max_length = max_length
+        self.pos = pos
+
+    def __call__(self, seq):
+        for i in range(self.n):
+            j = int(random.uniform(*self.pos) * len(seq))
+            length = random.randint(self.min_length, self.max_length)
+            seq = seq[:j] + seq[j + length:]
+        return seq
+
+
+class repeat(object):
+    '''
+        Forward repeats a sequence-part of 'length' with a distance of 'min_distance' characters
+        The insert position is between 'pos'% of the sequence
+        Should be called at last step
+    '''
+
+    def __init__(self, length=5, min_dist=0, pos=[0.05, 0.95]):
+        self.min_dist = min_dist
+        self.length = length
+        self.pos = pos
+
+    def __call__(self, seq):
+        min_dist = (self.min_dist / len(seq))  # to 0.0-1.0 map
+        j = int((len(seq) - self.length) * random.uniform(self.pos[0], 1 - self.min_dist))
+        repeat_ = seq[j:j + self.length]  # get part seq
+        j = int(len(seq) * random.uniform((j + self.length) / len(seq) + self.min_dist, self.pos[1]))
+        seq = seq[:j] + repeat_ + seq[j:]
+        return seq
+
+
+class reverse(object):
+    '''
+        Returns the reverse of the sequence
+    '''
+
+    def __call__(self, seq):
+        return seq[::-1]
+
+
+class complement(object):
+    '''
+        Returns the complement of a DNA sequence
+        G<->C, T<->A, N<->N
+    '''
+
+    def __init__(self, complement_map=complement_map):
+        self.complement_map = complement_map
+
+    def __call__(self, seq):
+        return seq.translate(complement_map)
+
+
+class reverse_complement(object):
+    '''
+        Returns the reverse complement of a DNA sequence
+    '''
+
+    def __init__(self, complement_map=complement_map):
+        self.complement_map = complement_map
+
+    def __call__(self, seq):
+        return seq[::-1].translate(complement_map)
+
+
+class add_tail(object):
+    '''
+        Adds a tail to the seq with a given random length of tail_type
+    '''
+
+    def __init__(self, tail_type='A', length=[5, 20]):
+        self.tail_type = tail_type
+        self.length = length
+
+    def __call__(self, seq):
+        j = random.randint(*self.length)
+        return seq + self.tail_type * j
+
+
+class remove_tail(object):
+    '''
+        Removes a tail of a seq of tail_type
+    '''
+
+    def __init__(self, tail_type='A'):
+        self.tail_type = tail_type
+
+    def __call__(self, seq):
+        while (seq[::-1].find(self.tail_type)) <= 0:
+            seq = seq[:-2]
+        return seq
+
+
+class inject_transposons(object):
+    '''
+    Inject a random transposon at a random position into the sequence. Can also create tandem site duplications (TSD).
+    '''
+
+    def __init__(self, pos=[0.05, 0.95], create_tsd=True, tsd_len=[5, 20]):
+        self.pos = pos
+        self.create_tsd = create_tsd
+        self.tsd_len = tsd_len
+
+    def __call__(self, seq):
+        transposon = ''  # get from database
+        if self.create_tsd:
+            tsd = ''  # create tsd
+            transposon = tsd + transposon + tsd
+        j = int((len(seq) - len(transposon)) * random.uniform(*self.pos))
+        seq = seq[:j] + transposon + seq[j:]
+
+        return seq
+
+
+class identity(object):
+    '''
+        Returns the identity (changes nothing)
+    '''
+
+    def __call__(self, seq):
+        return seq
+
+
+class compose_(object):
+    def __init__(self, list):
+        self.list = list
+
+    def __call__(self, seq):
+        return one_of([*self.list])(seq)
+
+
+class DNAFormer_Trainer(Trainer):
+    '''
+        custom trainer which overrides compute_loss with WCE and supports VAE training with additional mmd-loss
+    '''
+
+    def __init__(self, sample_weight=[], *args, **kwargs):
+        super(DNAFormer_Trainer, self).__init__(*args, **kwargs)
+        device = next(self.model.parameters()).device
+        self.sample_weight = sample_weight.to(device)
+        self.loss_fct = torch.nn.CrossEntropyLoss(weight=self.sample_weight)
+
+
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        # if not self.vae:
+        labels = inputs.get("labels")
+        # forward pass
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        # compute custom loss
+        loss = self.loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+
+        return (loss, outputs) if return_outputs else loss
+
+
+class Distributions():
+    '''
+        Distirbution class which returns defined distributions
+        Gauss - no restraints
+        circle & cross - only with latend_dim = 2
+    '''
+
+    def __init__(self, dist_type, nsamples, dim):
+        self.type = dist_type
+        self.nsamples = nsamples * 5
+        self.dim = dim
+
+        self.radius = 10  # for circle
+        self.expansion = 1.5  # for circle
+        self.angle = torch.tensor(2 * pi)  # for cross
+
+    def __call__(self):
+        if self.type == 'gauss':
+            dist = torch.randn(self.nsamples, self.dim, device='cuda')
+        elif self.type == 'circular':
+            # random angle and radius
+            angle = 2 * pi * torch.randn(self.nsamples, self.dim, device='cuda')
+            r = self.radius + torch.randn(self.nsamples, self.dim, device='cuda') * self.expansion
+
+            # coordinates
+            x = r * torch.cos(angle)
+            y = r * torch.sin(angle)
+            dist = torch.concat((x, y), axis=1).reshape(self.nsamples * 2, self.dim)
+
+        elif self.type == 'cross':
+            x = torch.randn(self.nsamples, self.ndim, device='cuda')
+            y = torch.randn(self.nsamples, self.ndim, device='cuda')
+
+            x = (x * torch.cos(self.angle) * y)
+            y = (y * torch.sin(self.angle) * x)
+            dist = torch.concat((x, y), axis=1).reshape(self.nsamples * 2, self.dim)
+
+        else:
+            raise Exception("No such distribution: ", self.type)
+        return dist
+
+
+class TrainingHistory:
+    """Keras like history object for training"""
+    def __init__(self, log_history):
+        self.history = {
+            'loss': [],
+            'val_loss': [],
+            'f1_m': [],
+            'val_f1_m': []
+        }
+        for entry in log_history:
+            if "loss" in entry and "epoch" in entry:
+                self.history['loss'].append(entry['loss'])
+            if "eval_loss" in entry:
+                self.history['val_loss'].append(entry['eval_loss'])
+            if "f1" in entry:
+                self.history['f1_m'].append(entry['f1'])
+            if "eval_f1" in entry:
+                self.history['val_f1_m'].append(entry['eval_f1'])
+
+
+def one_of(transform_list):
+    return transform_list[random.randint(0, (len(transform_list)-1))]
+
+
+def compute_metrics(pred):
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-1)
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='weighted', zero_division=0)
+    acc = accuracy_score(labels, preds)
+    return {"accuracy": float(acc), "f1": float(f1), "precision": float(precision), "recall": float(recall)}
+
+
+def get_model(vocab_file, num_classes):
+    '''
+        Sets the global selected model type with their given configuration
+    '''
+    global model, model_config
+
+    model_config = LongformerConfig(attention_window=64,
+                                    vocab_size=len(vocab_file),
+                                    max_position_embeddings=2048,
+                                    num_labels=num_classes,
+                                    hidden_size=768,
+                                    num_hidden_layers=8,
+                                    num_attention_heads=8,
+                                    intermediate_size=3072,
+                                    position_embedding_type='absolute',
+                                    problem_type="single_label_classification",
+                                    output_attentions=False,
+                                    return_dict=True,
+                                    pad_token_id=0,
+                                    bos_token_id=2,
+                                    eos_token_id=3)
+    model = LongformerForSequenceClassification(model_config)
+
+    return model
+
+
+# ====================
+# funtions from utils io_handler
+# ====================
+def fasta2dict(datadict_, file_name, mode="T"):
+    data = SeqIO.parse(file_name, "fasta")
+    for l, entry in enumerate(iter(data)):
+        try:
+            description = entry.description
+            if mode == "T":
+                seq_type = description.split(" ")[0].split("#")[1]
+                if seq_type in datadict_.keys():
+                    datadict_[seq_type].append([str(entry.seq), str(entry.id)])
+                else:
+                    print(f"[ERROR] Sequence not found in dataset --> {seq_type}")
+            elif mode == "P":
+                seq_type = "no_class"
+                if seq_type in datadict_.keys():
+                    datadict_[seq_type].append([str(entry.seq), str(entry.id)])
+        except Exception as e:
+            raise Exception('Error while loading ', file_name, '\n', e)
+    total_len = 0
+
+    # for key in datadict_.keys():
+        # key_len = len([d[0] for d in datadict_[key]])
+        # total_len += key_len
+        # print(key, "len: ", key_len)
+    #print("total_len: ", total_len)
+    return datadict_
+
+
+def load_vocab(file_name='data/5mer_vocab'):
+    '''
+    Loads a specified vocab txt file dictionary for the transformer
+    '''
+    vocab_file = {}
+    with open(file_name + '.txt', 'r', encoding="utf-8") as f:
+        tokens = f.readlines()
+    for i, token in enumerate(tokens):
+        token = token.rstrip("\n")
+        vocab_file[token] = i
+
+    return vocab_file
+
+
+def create_vocab(k=5):
+    """
+    Creates a kmer-vocabulary
+    Needs manual post-processing to remove all ' which are added to python strings
+    """
+    import itertools
+    list = ["".join(x) for x in itertools.product(["A", "G", "T", "C", "N"], repeat=k)]
+
+    dict_list = []
+    dictionary = {}
+    dictionary["[PAD]"] = 0
+    dictionary["[UNK]"] = 1
+    dictionary["[CLS]"] = 2
+    dictionary["[SEP]"] = 3
+    dictionary["[MSK]"] = 4
+    for i, k in enumerate(list):
+        dictionary[k] = i + 5
+
+    print(dictionary)
+    exit()
+
+
+# ====================
+# FUNCIONES AUXILIARES
+# ====================
+def seq2kmer(seq, embedd_larger_seq=True, max_len=1024, k=5):
+    '''
+        Creates a whitespace splitted list of kmers
+    '''
+    # dilate kmers with larger embedding_window 'w'
+    if embedd_larger_seq:
+        w = min(max(2, int(len(seq) / max_len)), k - 1)  # compute w dynamically up to k steps
+    else:
+        w = 1
+    kmer = [seq[i:i + k] for i in range(0, len(seq) + 1 - k, w)]
+    kmer = " ".join(kmer)
+    return kmer, w
+
+
+def split_dataset(dataset, train=0.75, valid=0.15, test=0.1):
+    '''
+        Splits the dataset-dictionary into several lists based upon train/valid/test
+    '''
+    train_len = int(train*len(dataset))
+    valid_len = int(valid*len(dataset))
+    return dataset[:train_len], dataset[train_len:train_len+valid_len], dataset[train_len+valid_len:]
+
+
+def dict2dataset(data_, classification_map, normalization=True, mode="T", training=0.75, validation=0.15, test_set=0.1):
+    '''
+        Returns a splitted preprocessed dataset
+    '''
+    # change to list style
+    dataset_train, dataset_valid, dataset_test = [], [], []
+    dataset_predict, labels = [], []
+    norm = normalize()
+    for key in data_.keys():
+        dataset_ = []
+        for seq in (j for j in data_[key]):
+
+            if mode == "T":
+                if normalization:
+                    dataset_ += [[norm(seq[0]), seq[1], classification_map[key]]]
+                else:
+                    dataset_ += [[seq[0], seq[1], classification_map[key]]]
+
+            if mode == "P":
+                if normalization:
+                    dataset_ += [[norm(seq[0]), seq[1], "no_class"]]
+                else:
+                    dataset_ += [[seq[0], seq[1], "no_class"]]
+                labels.append(seq[1])
+
+        if mode == "T":
+            train, valid, test = split_dataset(dataset_,training, validation, test_set)
+            dataset_train += list(train)
+            dataset_valid += list(valid)
+            dataset_test += list(test)
+        elif mode == "P":
+            dataset_predict += list(dataset_)
+
+
+    if mode == "T":
+        return dataset_train, dataset_valid, dataset_test
+    elif mode == "P":
+        return dataset_predict, labels
+    else:
+        return None
+
+
+def load_data(fasta_path, mode="T", training=0.75, valid=0.15, test=0.1):
+    if mode == "T":
+        # create empty dict
+        te_keywords = list(superf_dict.keys())
+        datadict_ = {i: [] for i in te_keywords}
+
+        classification_map = {i: te_keywords.index(i) for i in te_keywords}
+        classification_map_int = {int(str(superf_dict[k])): k for k in classification_map}
+
+        dict = fasta2dict(datadict_, file_name=fasta_path)
+        dataset_train, dataset_valid, dataset_test = dict2dataset(dict, classification_map, mode=mode, training=training, validation=valid, test_set=test)
+
+        return dataset_train, dataset_valid, dataset_test, datadict_
+
+    elif mode == "P":
+        datadict_ = {"no_class": []}
+        dict = fasta2dict(datadict_, file_name=fasta_path, mode=mode)
+        dataset_predict, labels = dict2dataset(dict, [], True, mode)
+        return dataset_predict, datadict_, labels
+    else:
+        return None
+
+
+def tokenizer_fun(PanTEon_dir):
+    """
+    The k-mer tokenizer splits the DNA-seq into k-mers and applies tokenization and encoding based on a vocabulary
+    Note that 5-mer is the default configuration
+    """
+    # initialize kmer tokenizer
+    kmer_tokenizer = tokenizers.Tokenizer(
+        WordLevel.from_file(f"{PanTEon_dir}/data/5mer_vocab.json", unk_token="[UNK]"))
+    kmer_tokenizer.pre_tokenizer = Whitespace()
+    kmer_tokenizer.post_processor = TemplateProcessing(
+        single="[CLS] $A [SEP]",
+        pair="[CLS] $A [SEP] $B:1 [SEP]:1",
+        special_tokens=[
+            ("[PAD]", 0),
+            ("[UNK]", 1),
+            ("[CLS]", 2),
+            ("[SEP]", 3),
+            ("[MSK]", 4),
+        ],
+    )
+    max_length = 2046  # take additional "[CLS] $A [SEP]" into account
+    kmer_tokenizer.enable_truncation(max_length=max_length)
+    kmer_tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=max_length,
+                                  pad_to_multiple_of=64)
+    return kmer_tokenizer
+
+
+def metrics(Y_validation,predictions, num_classes):
+
+    classes = len(np.unique(Y_validation))
+    print('Accuracy:', accuracy_score(Y_validation, predictions))
+    print('F1 score:', f1_score(Y_validation, predictions,average='weighted'))
+    print('Recall:', recall_score(Y_validation, predictions,average='weighted'))
+    print('Precision:', precision_score(Y_validation, predictions, average='weighted'))
+    print('\n clasification report:\n', classification_report(Y_validation, predictions))
+    print('\n confusion matrix:\n',confusion_matrix(Y_validation, predictions))
+    #Creamos la matriz de confusión
+    snn_cm = confusion_matrix(Y_validation, predictions)
+
+    # Visualizamos la matriz de confusión
+    snn_df_cm = pd.DataFrame(snn_cm, range(num_classes), range(num_classes))
+    plt.figure(figsize = (20,14))
+    sn.set(font_scale=1.4) #for label size
+    sn.heatmap(snn_df_cm, annot=True, annot_kws={"size": 12}) # font size
+    plt.savefig('confusionMatrix_DeepTE.png', bbox_inches='tight', dpi=500)
+
+
+def plot_training_metrics(history):
+    # plot metrics
+    plt.figure()
+    plt.plot(history.history['val_f1_m'])
+    plt.plot(history.history['f1_m'])
+    plt.legend(['val_f1_m', 'train_f1_m'], loc='upper right')
+    plt.xlabel('Epoch')
+    plt.ylabel('f1_m')
+    plt.title('Epoch vs f1_m')
+    plt.savefig('Train_Curve_TEClass2.png', bbox_inches='tight', dpi=500)
+
+    plt.figure()
+    plt.plot(history.history['val_loss'])
+    plt.plot(history.history['loss'])
+    plt.legend(['val_loss', 'train_loss'], loc='upper right')
+    plt.xlabel('Epoch')
+    plt.ylabel('loss')
+    plt.title('Epoch vs Loss')
+
+    plt.figure()
+    plt.plot(history.history['val_loss'])
+    plt.plot(history.history['loss'])
+    plt.legend(['val_loss', 'train_loss'], loc='lower right')
+    plt.xlabel('Epoch')
+    plt.ylabel('loss')
+    plt.title('Epoch vs loss')
+    plt.savefig('Train_Curve_los_TEClass2.png', bbox_inches='tight', dpi=500)
+
+
+def is_main_process():
+    # HF Trainer/Accelerate inyecta envs; cae en LOCAL_RANK si no
+    return int(os.environ.get("RANK", os.environ.get("PROCESS_RANK", "0"))) == 0
+
+
+def get_local_rank():
+    return int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+
+
+def setup_device_and_log():
+    if torch.cuda.is_available():
+        n = torch.cuda.device_count()
+        names = [torch.cuda.get_device_name(i) for i in range(n)]
+        print(f"[INFO] CUDA Available: {n} GPU(s) -> {names}")
+        if "LOCAL_RANK" in os.environ:
+            lr = get_local_rank()
+            torch.cuda.set_device(lr)
+            print(f"[INFO] LOCAL_RANK={lr} -> usando cuda:{lr}")
+    else:
+        print("[INFO] CUDA not available; CPU will be used")
+
+
+# ====================
+# MAIN
+# ====================
+if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        print(f"[ERROR] Parameter TE_library.fasta and work_dir are required.")
+        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta work_dir [script_mode]")
+        sys.exit(1)
+    else:
+        TE_library = sys.argv[1]
+        work_dir = sys.argv[2]
+        if len(sys.argv) > 3:
+            script_mode = sys.argv[3].upper()
+            if script_mode not in ['T', 'P']:
+                print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
+                print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta work_dir [script_mode]")
+                sys.exit(1)
+        else:
+            print("[INFO] Using training script mode by default")
+            script_mode = "T"
+
+    if script_mode == "T":
+        start_all = time.time()
+        print("[INFO] ### Step 0: Starting to load and transform the dataset......")
+        start = time.time()
+        setup_device_and_log()
+
+        base_seed = 42 + get_local_rank()  # <-- NUEVO
+        random.seed(base_seed)
+        np.random.seed(base_seed)
+        torch.manual_seed(base_seed)
+
+        num_classes = 30
+
+        # define the training arguments
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+        training_args = TrainingArguments(
+            bf16=True,
+            fp16=False,
+            output_dir='workdir/TEClass2_retraining',
+            num_train_epochs=100, # 100
+            per_device_train_batch_size=210, # 210
+            gradient_accumulation_steps=4,
+            per_device_eval_batch_size=210, # 210
+            eval_strategy="steps",
+            eval_steps=2000,
+            eval_accumulation_steps=10,
+            save_strategy="steps",
+            save_steps=2000,
+            save_total_limit=2,
+            disable_tqdm=False,
+            dataloader_num_workers=20,
+            dataloader_pin_memory=True,
+            dataloader_persistent_workers=True,
+            dataloader_drop_last=False,
+            group_by_length=False,
+            metric_for_best_model='eval_f1',
+            load_best_model_at_end=True,
+            warmup_steps=200,
+            weight_decay=0.01,
+            logging_steps=200,
+            logging_dir='workdir/logs',
+            report_to="tensorboard",
+            optim="adamw_torch_fused",
+            ddp_backend="nccl",
+            ddp_find_unused_parameters=False,
+        )
+
+        dataset_train, dataset_valid, dataset_test, datadict_ = load_data(TE_library)
+        tokenizer = tokenizer_fun()
+        dataset_train = TransposonDataset(dataset_train, datadict_, tokenizer, train=True)  # apply with augmentation
+        dataset_valid = TransposonDataset(dataset_valid, datadict_, tokenizer)
+        dataset_test = TransposonDataset(dataset_test, datadict_, tokenizer)
+
+        ##########################
+        # 0. Save the data
+        if is_main_process():
+            os.makedirs("data_for_training/", exist_ok=True)
+            torch.save(dataset_train, "data_for_training/dataset_train.pt")
+            torch.save(dataset_valid, "data_for_training/dataset_valid.pt")
+            torch.save(dataset_test, "data_for_training/dataset_test.pt")
+
+        # Barrera simétrica opcional si después todos leen esos ficheros
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+
+        # To load the data
+        """dataset_train = torch.load("data_for_training/dataset_train.pt", weights_only=False)
+        dataset_valid = torch.load("data_for_training/dataset_valid.pt", weights_only=False)
+        dataset_test = torch.load("data_for_training/dataset_test.pt", weights_only=False)"""
+
+        end = time.time()
+        print(f"### Step 0 Done !! [{end - start}]......")
+
+        ##########################
+        # 1. data split: 80% train, 10% dev and 10% test
+
+        ##########################
+        # 2. Preprocess input data
+
+        ###########################
+        # 3. Preprocess class labels; i.e. convert 1-dimensional class arrays to 3-dimensional class matrices
+
+        ###########################
+        # 4. Fit model on training data
+        print("### Step 4: Starting the fitting ......")
+        start = time.time()
+
+        vocab_file = load_vocab('data/5mer_vocab')
+        checkpoint = None
+        model = get_model(vocab_file, num_classes)
+        total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"[INFO] Total trainable parameters:  {total_trainable:,}")
+
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.config.use_cache = False
+        # model = torch.compile(model)
+
+        # model = AutoModelForSequenceClassification.from_pretrained("TEClass2_retrained_model.h5")
+
+        sample_weight = dataset_train.sample_weight
+        # instantiate the trainer class
+        trainer = DNAFormer_Trainer(
+            sample_weight=sample_weight,
+            model=model,
+            args=training_args,
+            compute_metrics=compute_metrics,
+            train_dataset=dataset_train,
+            eval_dataset=dataset_valid
+        )
+
+        train_result = trainer.train()
+        print(train_result)
+
+        end = time.time()
+        print(f"### Step 4 Done !! [{end - start}]......")
+
+        ###########################
+        # 5.  save the model
+        print("### Step 5: Saving the trained model ......")
+        start = time.time()
+
+        trainer.save_model('TEClass2_retrained_model')  # save best model
+
+        end = time.time()
+        print(f"### Step 5 Done !! [{end - start}]......")
+
+        ###########################
+        # 6. Training report
+        print("### Step 6: Creating the training reports ......")
+        start = time.time()
+
+        my_metrics = trainer.evaluate()
+        trainer.save_metrics('eval', my_metrics)
+
+        history = trainer.state.log_history
+        training_history = TrainingHistory(history)
+        plot_training_metrics(training_history)
+
+        end = time.time()
+        print(f"### Step 6 Done !! [{end - start}]......")
+
+        ###########################
+        # 7. Testing report
+        print("### Step 7: Creating the testing reports ......")
+        start = time.time()
+
+        pred_out = trainer.predict(dataset_test)
+        logits = pred_out.predictions
+        if isinstance(logits, tuple):
+            logits = logits[0]
+
+        predicted_classes = np.argmax(logits, axis=1)
+        metrics(pred_out.label_ids, predicted_classes, num_classes)
+
+        end = time.time()
+        print(f"### Step 7 Done !! [{end - start}]......")
+
+        end_all = time.time()
+        print(f"[INFO] Training process successfully complete. Total time={end_all - start_all} seconds. ")
+
+    elif script_mode == "P":
+
+        ##########################
+        # 0. Load and transform the data
+        start_all = time.time()
+        print("### Step 0: Starting to load and transform the dataset......")
+        start = time.time()
+
+        dataset_predict, datadict_, labels = load_data(TE_library, script_mode)
+        tokenizer = tokenizer_fun()
+        new_dataset = TransposonDataset(dataset_predict, datadict_, tokenizer, train=False)
+
+        end = time.time()
+        print(f"### Step 0 Done !! [{end - start}]......")
+
+        ##########################
+        # 1. Preprocess input data
+
+        ###########################
+        # 2. Load the already trained model
+        print("### Step 2: Starting to load the model......")
+        start = time.time()
+
+        tokenizer = tokenizer_fun()
+        vocab_file = load_vocab('data/5mer_vocab')
+        num_classes = 30
+        model = AutoModelForSequenceClassification.from_pretrained(
+            'TEClass2_retrained_model',
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        ).to('cuda' if torch.cuda.is_available() else 'cpu')
+        model.eval()
+
+        pred_args = TrainingArguments(
+            output_dir="workdir/infer",
+            per_device_eval_batch_size=128,
+            dataloader_num_workers=20,
+            dataloader_pin_memory=True,
+            report_to="none",
+            fp16=False,
+            bf16=torch.cuda.is_available(),  # usa bf16 en GPU si está disponible
+            disable_tqdm=True,
+        )
+
+        dummy_sample_weight = new_dataset.sample_weight
+
+        infer_trainer = DNAFormer_Trainer(
+            sample_weight=dummy_sample_weight,
+            model=model,
+            args=pred_args,
+            compute_metrics=None,  # o deja tu compute_metrics si quieres métricas (si hay labels)
+            train_dataset=None,  # no entrenamos
+            eval_dataset=new_dataset  # el dataset nuevo va aquí
+        )
+
+        end = time.time()
+        print(f"### Step 2 Done !! [{end - start}]......")
+
+        ###########################
+        # 3. Predict the labels
+        print("### Step 3: Starting to predict the TE classification......")
+        start = time.time()
+
+        pred_out = infer_trainer.predict(new_dataset)
+
+        logits = pred_out.predictions
+        if isinstance(logits, tuple):
+            logits = logits[0]
+
+        y_preds_probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
+
+        end = time.time()
+        print(f"### Step 3 Done !! [{end - start}]......")
+
+        ###########################
+        # 4. Save results in fasta and in csv
+        print("### Step 4: Starting to save the results......")
+        start = time.time()
+
+        inv_superf_dict = {
+            0: 'CLASSI/LTR/LTR', 1: 'CLASSI/LTR/COPIA', 2: 'CLASSI/LTR/GYPSY', 3: 'CLASSI/LTR/ERV', 4: 'CLASSI/LTR/BELPAO',
+            5: 'CLASSI/LINE/LINE', 6: 'CLASSI/LINE/I', 7: 'CLASSI/LINE/L1', 8: 'CLASSI/LINE/RTE', 9: 'CLASSI/DIRS/DIRS',
+            10: 'CLASSI/PLE/PLE', 11: 'CLASSI/SINE/SINE', 12: 'CLASSI/SINE/TRNA', 13: 'CLASSII/HELITRON/HELITRON',
+            14: 'CLASSII/CRYPTON/CRYPTON', 15: 'CLASSII/TIR/HAT', 16: 'CLASSII/TIR/MERLIN', 17: 'CLASSII/TIR/P',
+            18: 'CLASSII/TIR/TIR', 19: 'CLASSII/TIR/TC1MARINER', 20: 'CLASSII/TIR/MULE', 21: 'CLASSII/TIR/PIFHARBINGER',
+            22: 'CLASSII/TIR/CACTA', 23: 'CLASSII/TIR/PIGGYBAC', 24: 'CLASSI/LINE/CR1', 25: 'CLASSI/LINE/R1',
+            26: 'CLASSI/LTR/LARD', 27: 'CLASSI/SINE/ALU', 28: 'CLASSII/TIR/KOLOBOK', 29: 'CLASSII/TIR/ACADEM-1'
+        }
+        y_pred_idx = np.argmax(logits, axis=1)
+        y_pred_label = [inv_superf_dict[i] for i in y_pred_idx]
+        prob_of_pred = y_preds_probs[np.arange(len(y_pred_idx)), y_pred_idx]
+        df = pd.DataFrame(
+            {
+                "id": labels,
+                "predicted_class": y_pred_label,
+                "probability": prob_of_pred,
+            }
+        )
+        df.to_csv("classification_prediction.csv", index=False)
+
+        min_prob = 0.0
+        final_seqs = []
+        for TE in SeqIO.parse(TE_library, "fasta"):
+            # remove previous classification if any
+            original_name = TE.id.split("#")[0]
+            position = labels.index(TE.id)
+            new_classification = y_pred_label[position] if prob_of_pred[position] >= min_prob else "Unknown"
+            TE.id = original_name + "#" + new_classification
+            if len(TE.description.split(" ")) > 1:
+                complement = " ".join(TE.description.split(" ")[1:])
+                TE.id += " " + complement
+            TE.description = ""
+            final_seqs.append(TE)
+        SeqIO.write(final_seqs, "classification_prediction.fasta", "fasta")
+
+        end = time.time()
+        print(f"### Step 4 Done !! [{end - start}]......")
+
+        end_all = time.time()
+        print(f"[INFO] Inference process successfully complete. Total time={end_all - start_all} seconds. ")
+
+    else:
+        print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
+        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
+        sys.exit(1)
