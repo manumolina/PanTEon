@@ -225,6 +225,37 @@ The PanTEon's output are:
 Which ML/DL approaches are integrated into PanTEon
 * Auto-trimming (Galeote et al., 2024)
 
+## Integrating Custom models to PanTEon
+PanTEon is designed to be a flexible and extensible framework, allowing users to develop and integrate their own ML or DL architectures seamlessly alongside the built-in models.
+
+**Custom Model Requirements**
+
+To be compatible with PanTEon, custom models must meet the following requirements:
+* Be implemented using TensorFlow or PyTorch as the deep learning framework
+* Be written as a Python script
+* Define three mandatory functions: load_data, get_model, and run_experiment (see figure below for a detailed description of their expected behavior)
+* Define two attributes: DL_FRAMEWORK and superf_dict
+* Be placed inside the Custom_classifiers/ directory of the PanTEon framework
+
+**Automatic Model Discovery**
+
+PanTEon automatically detects and loads custom models at runtime. Every time the training or inference module is executed:
+* All Python scripts located in the Custom_classifiers/ folder are automatically imported
+* Custom models become immediately available for training, and inference modules
+* User-defined architectures will be evaluated and compared under the same conditions as the built-in models
+
+This design allows researchers to rapidly prototype new architectures and directly assess their performance within a standardized and reproducible TE analysis framework.
+
+Why This Matters
+
+By supporting custom models, PanTEon functions not only as a TE analysis tool, but also as a benchmarking platform for ML/DL research on TEs, enabling fair comparisons between novel and established architectures.
+
+<p align="center">
+  <img src="https://github.com/simonorozcoarias/PanTEon/blob/main/Figures/Figure%20S1.png">
+</p>
+
+You can fin two examples (one script using tensorflow and another using pytorch) in the Custom_classifiers.
+
 ## References
 If you use any of the ML/DL algorithms integrated into PanTEon, please cite them as following:
 * Chen, Y., Qi, Y., Wu, Y., Zhang, F., Liao, X., & Shang, X. (2024). BERTE: High-precision hierarchical classification of transposable elements by a transfer learning method with BERT pre-trained model and convolutional neural network. BioRxiv, 2024-01.
