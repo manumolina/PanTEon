@@ -100,7 +100,9 @@ python3 PanTEon.py evaluation -h
 Every subcommand (module) has different required parameters and you should always check them before running PanTEon.
 
 ### Training
+```
 usage: PanTEon.py training [-h] -f FASTA [-w WORK_DIR] -t THREADS [-n MODELS] -d MODELS_DIRECTORY [-z MIN_PROB]
+```
 
 options:
   -h, --help            show this help message and exit
@@ -120,7 +122,9 @@ options:
 It is highly recommended to create and use an output directory in each execution to avoid the substitution of result files from different runs of PanTEon.
 
 ### Inference
+```
 usage: PanTEon.py inference [-h] -f FASTA -t THREADS -w WORK_DIR [-n MODELS] -d MODELS_DIRECTORY -p PREFIX [-z MIN_PROB]
+```
 
 options:
   -h, --help            show this help message and exit
@@ -140,7 +144,9 @@ options:
                         Minimum probability to classify a TE
 
 ### Library
+```
 usage: PanTEon.py library [-h] [--taxon TAXON] [--req_class REQ_CLASS] [--view_only]
+```
 
 options:
   -h, --help            show this help message and exit
