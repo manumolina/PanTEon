@@ -216,7 +216,7 @@ This task focuses on finding the correct TE ends in a longer sequences, in the c
 How it is performed in PanTEon (--trimming parameter)
 
 Within PanTEon, inputs required to perform the classification are:
-* a fasta file containing sequences, with the correct starting and ending positions (between 0-1) integrated into the IDs, separated by "_" symbol (e.g. Sequence1_500_5500).
+* a fasta file containing sequences, with the correct starting and ending positions (between 0-1) integrated into the IDs, separated by "_" symbol (e.g. Sequence1_0.0227_0.25).
 
 The PanTEon's output are:
 * A set of trained models inside a directory (specified by the -d parameter; training module only)
@@ -257,7 +257,7 @@ By supporting custom models, PanTEon functions not only as a TE analysis tool, b
   <img src="https://github.com/simonorozcoarias/PanTEon/blob/main/Figures/Figure%20S1.png">
 </p>
 
-You can fin two examples (one script using tensorflow and another using pytorch) in the Custom_classifiers.
+You can fin two examples (one script using tensorflow and another using pytorch) in the Custom_classifiers folder.
 
 ## References
 If you use any of the ML/DL algorithms integrated into PanTEon, please cite them as following:
