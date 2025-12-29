@@ -5,7 +5,8 @@
 # Deep Learning Framework for Transposable Element Discovery and Annotation
 
 ## Table of Contents  
-* [Introduction](#introduction)  
+* [Introduction](#introduction)
+* [State-of-the-art tools Performance](#benchmarking)
 * [Installation](#installation)  
 * [Testing](#testing)  
 * [Usage](#usage)
@@ -60,6 +61,28 @@ This functionality is particularly useful for reducing the computational cost of
 <p align="center">
   <img src="https://github.com/simonorozcoarias/PanTEon/blob/main/Figures/PanTEon_modules.png">
 </p>
+
+## State-Of-The-Art Tool Performance
+Below we present the most recent benchmarking results of state-of-the-art TE classification tools, evaluated using the PanTEon framework. All benchmarks were conducted with the PanTEon Database v1.5.1 (benchmark edition) and the built-in models provided by the PanTEon framework, ensuring a fair and standardized comparison across methods.
+
+### Benchmarking task
+The evaluated task was TE superfamily classification, performed under a controlled and consistent setup:
+* All species: 30 superfamilies
+* Animalia: 30 superfamilies
+* Plantae: 20 superfamilies
+* Fungi: 18 superfamilies
+
+| Tool | Model type | # trainable parameters | Used features | F1 All species | F1 Animalia | F1 Plantae | F1 Fungi |
+| :------------: |:---------------:| :-----:| :-----:|  :-----:|  :-----:|  :-----:|  :-----:| 
+| BERTE | Transformers | 9,199,830 | Embedded DNA + k-mer frequencies | 56.2 | 59 | 62 | 68 |
+| ClassifyTE | Stacking-based ML model | 502,133 | K-mer frequencies | 86.3 | 88 | 89 | 86 |
+| CREATE | CNN+RNN | 72,191,518 | One-hot + k-mer frequencies | 87.9 | 88 | 89 | 86 |
+| DeepTE | CNN | 59,075,823 | K-mer frequencies | 85.8 | 88 | 89 | 83 |
+| Inpactor2_Class | CNN | 546,830 | K-mer frequencies | 85.2 | 87 | 88 | 84 |
+| NeuralTE | CNN | 603,710 | Structural features + K-mers frequencies | 92.5 | 92 | 93 | 93 |
+| TEclass2 | Transformers | 75,470,622 | Embedded DNA | 66.4 | 74 | 48 | 35 |
+| TERL | CNN | 889,138 | One-hot | 74.4 | 77 | 83 | 88 |
+| Terrier | CNN | 2,127,894 | Embedded DNA | 88.2 | 88 | 89 | 76 |
 
 ## Installation:
 We highly recommend to use and install Python packages within an Anaconda environment. First, download the lastest version of PanTEon
