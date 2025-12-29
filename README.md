@@ -6,7 +6,7 @@
 
 ## Table of Contents  
 * [Introduction](#introduction)
-* [State-of-the-art tools Performance](#benchmarking)
+* [State-Of-The-Art Tool Performance](#benchmarking)
 * [Installation](#installation)  
 * [Testing](#testing)  
 * [Usage](#usage)
