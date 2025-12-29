@@ -97,6 +97,8 @@ conda env create -f PanTEon_env.yml
 ```
 Now download the latest version of the PanTEon Database (https://zenodo.org/XXXXXXXXX) and place it in the data/ folder.
 
+Finally, access to PanTEon Database (https://zenodo.org/XXXXXXXXX) and download the trained models you are interested in (e.g. All species, Animalia, Plantae, etc). This directory is the one you need to indicate in the -d parameter when using the inference module.
+
 ## Testing:
 After successfully installing PanTEon_env, you can test it using the testing data contained in this repository. To do so, first you must activate the conda environment:
 ```
