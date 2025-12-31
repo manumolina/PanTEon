@@ -36,17 +36,6 @@ import difflib
 from typing import Dict, Tuple, List
 import importlib.util
 
-# to load the ML based models
-from Classifiers import NeuralTE
-from Classifiers import CREATE
-from Classifiers import ClassifyTE
-from Classifiers import DeepTE
-from Classifiers import TERL
-from Classifiers import Inpactor2_Class
-from Classifiers import Terrier
-from Classifiers import BERTE
-from Classifiers import TEClass2
-
 superf_dict = {'LTR': 0, 'COPIA': 1, 'GYPSY': 2, 'ERV': 3, 'BELPAO': 4, 'LINE': 5, 'I': 6, 'L1': 7,
                    'RTE': 8, 'DIRS': 9, 'PLE': 10, 'SINE': 11, 'TRNA': 12, 'HELITRON': 13, 'CRYPTON': 14,
                    'HAT': 15, 'MERLIN': 16, 'P': 17, 'TIR': 18, 'TC1MARINER': 19, 'MULE': 20,
@@ -107,6 +96,8 @@ def parse_args():
     )
     p_train.add_argument("-z", "--min_prob", required=False, default=0.6, type=float,
                        help="Minimum probability to classify a TE")
+    p_train.add_argument("-k", "--task", default="classification",
+                         help="Desired TE task. Options=classification, identification, trimming. Default=classification")
 
     # -----------------------
     # inference
@@ -128,6 +119,8 @@ def parse_args():
                        help="Prefix for the output results")
     p_inf.add_argument("-z", "--min_prob", required=False, default=0.6, type=float,
                        help="Minimum probability to classify a TE")
+    p_inf.add_argument("-k", "--task", default="classification",
+                         help="Desired TE task. Options=classification, identification, trimming. Default=classification")
 
     # -----------------------
     # library
@@ -1558,59 +1551,139 @@ if __name__ == '__main__':
         model_list = args.models
         output_directory = args.models_directory
         min_prob = args.min_prob
+        task = str(args.task).lower()
 
-        info("Executing PanTEon training module ... ")
+        if task == "classification":
+            # to load the ML based models
+            from Classifiers import NeuralTE
+            from Classifiers import CREATE
+            from Classifiers import ClassifyTE
+            from Classifiers import DeepTE
+            from Classifiers import TERL
+            from Classifiers import Inpactor2_Class
+            from Classifiers import Terrier
+            from Classifiers import BERTE
+            from Classifiers import TEClass2
 
-        models = []
-        if model_list is None:
+            info(f"Executing PanTEon training module for task {task}... ")
+
             models = []
-            info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
-        elif model_list.lower() == "all":
-            models = ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
-                      "TEClass2"]
-        else:
-            for m in model_list.split(","):
-                if m in ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
-                         "TEClass2"]:
-                    models.append(m)
-                else:
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
+                          "TEClass2"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
+                             "TEClass2"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for classification are: NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2")
+
+                if len(models) == 0:
+                    info(f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
+
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_classifiers")
+            if model_list is not None:
+                info("Using the following in-built ML/DL models: ")
+                for m in models:
+                    print(f"    -> {m}")
+            if len(custom_registry) > 0:
+                info("Using the following customs ML/DL models: ")
+                for m in custom_registry.keys():
+                    print(f"    -> {m}")
+
+            if not os.path.exists(TE_library):
+                error(f"The input fasta file {TE_library} was not found.")
+
+            os.makedirs(work_dir, exist_ok=True)
+
+            if output_directory is None:
+                error(
+                    "For training mode you must indicate the directory where the trained models will be saved (-d parameter)")
+
+            if os.path.exists(f"{PanTEon_dir}/data_for_training"):
+                shutil.rmtree(f"{PanTEon_dir}/data_for_training")
+            os.makedirs(output_directory, exist_ok=True)
+            TE_library = check_num_samples(TE_library, output_directory)
+            superf_dict, inv_superf_dict, num_classes = generate_dict_classification(TE_library)
+
+            info(f"Using the following classes ({num_classes}) ... ")
+            print(f"    -> {list(superf_dict.keys())}")
+            training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir)
+            create_config_json(f"{output_directory}/training_variables.json", superf_dict, inv_superf_dict, num_classes,
+                               min_prob)
+
+        elif task == "identification":
+            info(f"Executing PanTEon training module for task {task}... ")
+
+            models = []
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["PinaNet"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["PinaNet"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for identification are: PinaNet")
+
+                if len(models) == 0:
                     info(
-                        f"The model {m} isn't in the valid options. Remember that the compatible models are: NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2")
+                        f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
 
-            if len(models) == 0:
-                info(f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_identifiers")
+            if model_list is not None:
+                info("Using the following in-built ML/DL models: ")
+                for m in models:
+                    print(f"    -> {m}")
+            if len(custom_registry) > 0:
+                info("Using the following customs ML/DL models: ")
+                for m in custom_registry.keys():
+                    print(f"    -> {m}")
 
-        # To call the custom classifiers done by the user
-        custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_classifiers")
-        if model_list is not None:
-            info("Using the following in-built ML/DL models: ")
-            for m in models:
-                print(f"    -> {m}")
-        if len(custom_registry) > 0:
-            info("Using the following customs ML/DL models: ")
-            for m in custom_registry.keys():
-                print(f"    -> {m}")
+        elif task == "trimming":
+            info(f"Executing PanTEon training module for task {task}... ")
 
-        if not os.path.exists(TE_library):
-            error(f"The input fasta file {TE_library} was not found.")
+            models = []
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["autoTrimming"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["autoTrimming"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for trimming are: autoTrimming")
 
-        os.makedirs(work_dir, exist_ok=True)
+                if len(models) == 0:
+                    info(
+                        f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
 
-        if output_directory is None:
-            error(
-                "For training mode you must indicate the directory where the trained models will be saved (-d parameter)")
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_trimmers")
+            if model_list is not None:
+                info("Using the following in-built ML/DL models: ")
+                for m in models:
+                    print(f"    -> {m}")
+            if len(custom_registry) > 0:
+                info("Using the following customs ML/DL models: ")
+                for m in custom_registry.keys():
+                    print(f"    -> {m}")
 
-        if os.path.exists(f"{PanTEon_dir}/data_for_training"):
-            shutil.rmtree(f"{PanTEon_dir}/data_for_training")
-        os.makedirs(output_directory, exist_ok=True)
-        TE_library = check_num_samples(TE_library, output_directory)
-        superf_dict, inv_superf_dict, num_classes = generate_dict_classification(TE_library)
-
-        info(f"Using the following classes ({num_classes}) ... ")
-        print(f"    -> {list(superf_dict.keys())}")
-        training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir)
-        create_config_json(f"{output_directory}/training_variables.json", superf_dict, inv_superf_dict, num_classes,
-                           min_prob)
+        else:
+            error(f"Task (parameter -k/--task) did not found: {task}")
 
     elif module == "inference":
         TE_library = args.fasta
@@ -1620,63 +1693,143 @@ if __name__ == '__main__':
         output_directory = args.models_directory
         prefix = args.prefix
         min_prob = args.min_prob
+        task = str(args.task).lower()
 
-        info("Executing PanTEon inference module ... ")
-        models = []
-        if model_list is None:
+        if task == "classification":
+            # to load the ML based models
+            from Classifiers import NeuralTE
+            from Classifiers import CREATE
+            from Classifiers import ClassifyTE
+            from Classifiers import DeepTE
+            from Classifiers import TERL
+            from Classifiers import Inpactor2_Class
+            from Classifiers import Terrier
+            from Classifiers import BERTE
+            from Classifiers import TEClass2
+
+            info(f"Executing PanTEon inference module for task {task}... ")
             models = []
-            info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
-        elif model_list.lower() == "all":
-            models = ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
-                      "TEClass2"]
-        else:
-            for m in model_list.split(","):
-                if m in ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
-                         "TEClass2"]:
-                    models.append(m)
-                else:
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
+                          "TEClass2"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["NeuralTE", "Terrier", "CREATE", "ClassifyTE", "DeepTE", "Inpactor2_Class", "TERL", "BERTE",
+                             "TEClass2"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for classification are: NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2")
+
+                if len(models) == 0:
+                    error(f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
+
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_classifiers")
+
+            info("Using the following ML/DL models: ")
+            for m in models:
+                print(f"    -> {m}")
+            info("Using the following customs ML/DL models: ")
+            for m in custom_registry.keys():
+                print(f"    -> {m}")
+
+            if not os.path.exists(TE_library):
+                error(f"The input fasta file {TE_library} was not found.")
+
+            os.makedirs(work_dir, exist_ok=True)
+
+            if output_directory is not None:
+                info(f"PanTEon inference (prediction) module using trained models located at: {output_directory} ... ")
+                if not os.path.exists(output_directory):
+                    error(f"The model's directory path {output_directory} was not found.")
+            else:
+                error(
+                    f"for inference (prediction) module, you must indicate the path to the directory containing the training models with the parameter: -d [trained_model_dir]")
+
+            if prefix is None:
+                error("for inference (prediction) mode, you must indicate the -p parameter.")
+
+            superf_dict, inv_superf_dict, num_classes, min_prob, species_group = load_config(
+                f"{output_directory}/training_variables.json")
+
+            info("Obtained the following information:")
+            print(f"    -> Available classes ({num_classes}):")
+            print(f"    -> {list(superf_dict.keys())}")
+            print(f"    -> probability threshold = {min_prob} ")
+
+            inference(TE_library, work_dir, threads, num_classes, models, output_directory, inv_superf_dict, prefix,
+                      min_prob, custom_registry, PanTEon_dir)
+
+        elif task == "identification":
+            info(f"Executing PanTEon training module for task {task}... ")
+
+            models = []
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["PinaNet"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["PinaNet"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for identification are: PinaNet")
+
+                if len(models) == 0:
                     info(
-                        f"The model {m} isn't in the valid options. Remember that the compatible models are: NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2")
+                        f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
 
-            if len(models) == 0:
-                error(f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_identifiers")
+            if model_list is not None:
+                info("Using the following in-built ML/DL models: ")
+                for m in models:
+                    print(f"    -> {m}")
+            if len(custom_registry) > 0:
+                info("Using the following customs ML/DL models: ")
+                for m in custom_registry.keys():
+                    print(f"    -> {m}")
 
-        # To call the custom classifiers done by the user
-        custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_classifiers")
+        elif task == "trimming":
+            info(f"Executing PanTEon training module for task {task}... ")
 
-        info("Using the following ML/DL models: ")
-        for m in models:
-            print(f"    -> {m}")
-        info("Using the following customs ML/DL models: ")
-        for m in custom_registry.keys():
-            print(f"    -> {m}")
+            models = []
+            if model_list is None:
+                models = []
+                info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
+            elif model_list.lower() == "all":
+                models = ["autoTrimming"]
+            else:
+                for m in model_list.split(","):
+                    if m in ["autoTrimming"]:
+                        models.append(m)
+                    else:
+                        info(
+                            f"The model {m} isn't in the valid options. Remember that the compatible models for trimming are: autoTrimming")
 
-        if not os.path.exists(TE_library):
-            error(f"The input fasta file {TE_library} was not found.")
+                if len(models) == 0:
+                    info(
+                        f"there is not any compatible model in the -n parameter. Value got={model_list}. Trying to get custom models ...")
 
-        os.makedirs(work_dir, exist_ok=True)
+            # To call the custom classifiers done by the user
+            custom_registry = load_custom_classifiers(f"{PanTEon_dir}/Custom_trimmers")
+            if model_list is not None:
+                info("Using the following in-built ML/DL models: ")
+                for m in models:
+                    print(f"    -> {m}")
+            if len(custom_registry) > 0:
+                info("Using the following customs ML/DL models: ")
+                for m in custom_registry.keys():
+                    print(f"    -> {m}")
 
-        if output_directory is not None:
-            info(f"PanTEon inference (prediction) module using trained models located at: {output_directory} ... ")
-            if not os.path.exists(output_directory):
-                error(f"The model's directory path {output_directory} was not found.")
         else:
-            error(
-                f"for inference (prediction) module, you must indicate the path to the directory containing the training models with the parameter: -d [trained_model_dir]")
-
-        if prefix is None:
-            error("for inference (prediction) mode, you must indicate the -p parameter.")
-
-        superf_dict, inv_superf_dict, num_classes, min_prob, species_group = load_config(
-            f"{output_directory}/training_variables.json")
-
-        info("Obtained the following information:")
-        print(f"    -> Available classes ({num_classes}):")
-        print(f"    -> {list(superf_dict.keys())}")
-        print(f"    -> probability threshold = {min_prob} ")
-
-        inference(TE_library, work_dir, threads, num_classes, models, output_directory, inv_superf_dict, prefix,
-                  min_prob, custom_registry, PanTEon_dir)
+            error(f"Task (parameter -k/--task) did not found: {task}")
 
     elif module == "library":
         taxon = args.taxon
