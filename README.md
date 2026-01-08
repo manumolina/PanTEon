@@ -17,7 +17,8 @@
 * [Supported TE tasks](#supported) 
 * [Integrating Custom models to PanTEon](#integrating) 
 * [Computacional resources needed](#Resources)
-* [References](#references) 
+* [References](#references)
+* [Funding](#funding) 
 * [Citation](#citation)
 
 ## Introduction
@@ -302,6 +303,9 @@ Other resources used in this work:
 * Orozco-Arias, S., Sierra, P., Durbin, R., & González, J. (2024). MCHelper automatically curates transposable element libraries across eukaryotic species. Genome Research, 34(12), 2256-2268.
 * Pedro, D. L. F., Amorim, T. S., Varani, A., Guyot, R., Domingues, D. S., & Paschoal, A. R. (2021). An atlas of plant transposable elements. F1000Research, 10, 1194.
 * Martin, F. J., Amode, M. R., Aneja, A., Austine-Orimoloye, O., Azov, A. G., Barnes, I., Becker, A., Bennett, R., Berry, A., Bhai, J., & others. (2023). Ensembl 2023. Nucleic acids research, 51(D1), D933-D941.
+
+## Funding
+Simon Orozco-Arias is supported by a fellowship within the “Generación D” initiative, Red.es, Ministerio para la Transformación Digital y de la Función Pública, for talent attraction (C005/24-ED CV1). Funded by the European Union NextGenerationEU funds, through PRTR.
 
 ## Citation
 if you use this framework, the database or any part of it (as the neural network architectures, functions, etc), please cite us as following:
