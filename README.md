@@ -130,7 +130,7 @@ Every subcommand (module) has different required parameters and you should alway
 
 ### Training
 ```
-usage: PanTEon.py training [-h] -f FASTA [-w WORK_DIR] -t THREADS [-n MODELS] -d MODELS_DIRECTORY [-z MIN_PROB]
+usage: PanTEon.py training [-h] -f FASTA [-w WORK_DIR] -t THREADS [-n MODELS] -d MODELS_DIRECTORY [-z MIN_PROB] [-b BASED_MODELS]
 ```
 
 options:
@@ -141,6 +141,7 @@ options:
 * -n MODELS, --models MODELS: Models to be used (comma-separated). Options=All, NeuralTE, Terrier, CREATE, ClassifyTE, DeepTE, Inpactor2_Class, TERL, BERTE, TEClass2
 * -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY:Directory where models will be stored during training
 * -z MIN_PROB, --min_prob MIN_PROB: Minimum probability to classify a TE
+* -b BASED_MODELS: Pre-trained models used as initialization for re-training (transfer learning)
 
 It is highly recommended to create and use an output directory in each execution to avoid the substitution of result files from different runs of PanTEon.
 
