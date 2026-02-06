@@ -252,7 +252,7 @@ The PanTEon's output are:
 * a CSV fil containing the predicted starting and ending positions per sequence provided by each trained algorithm (inference module only)
 
 Which ML/DL approaches are integrated into PanTEon
-* Auto-trimming (Galeote et al., 2024)
+* No approach have been developed to date to tack this task
 
 ## Integrating Custom models to PanTEon
 PanTEon is designed to be a flexible and extensible framework, allowing users to develop and integrate their own ML or DL architectures seamlessly alongside the built-in models.
