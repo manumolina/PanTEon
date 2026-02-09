@@ -102,7 +102,7 @@ def parse_args():
     p_train.add_argument("-b", "--base_models",
                          help="Pre-trained models used as initialization for re-training (transfer learning)")
     p_train.add_argument("-g", "--gpus", required=False, default=1, type=int,
-                         help="Number of GPUs used for training. Defaul=1")
+                         help="Number of GPUs used for training. Default=1")
 
     # -----------------------
     # inference
