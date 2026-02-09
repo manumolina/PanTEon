@@ -142,6 +142,7 @@ options:
 * -d MODELS_DIRECTORY, --models_directory MODELS_DIRECTORY:Directory where models will be stored during training
 * -z MIN_PROB, --min_prob MIN_PROB: Minimum probability to classify a TE
 * -b BASED_MODELS: Pre-trained models used as initialization for re-training (transfer learning)
+* -g GPUs, --gpus GPUs: Number of GPUs used for training. Default=1
 
 It is highly recommended to create and use an output directory in each execution to avoid the substitution of result files from different runs of PanTEon.
 
