@@ -5,7 +5,7 @@ import os
 warnings.filterwarnings('ignore')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-import tensorflow as tf
+import tensorflow as tf, gc
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing, decomposition
 from sklearn.metrics import confusion_matrix, accuracy_score, f1_score, recall_score, precision_score, classification_report
@@ -23,7 +23,8 @@ import shutil
 import argparse
 from pathlib import Path
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.models import load_model, Model, Sequential
+from tensorflow.keras.layers import Dense
 import time
 import joblib
 import torch
@@ -31,7 +32,7 @@ import torch.nn.functional as F
 import pickle
 import json
 from hierarchicalsoftmax import greedy_predictions
-from transformers import TrainingArguments
+from transformers import TrainingArguments,LongformerForSequenceClassification
 import difflib
 from typing import Dict, Tuple, List
 import importlib.util
@@ -98,6 +99,10 @@ def parse_args():
                        help="Minimum probability to classify a TE")
     p_train.add_argument("-k", "--task", default="classification",
                          help="Desired TE task. Options=classification, identification, trimming. Default=classification")
+    p_train.add_argument("-b", "--base_models",
+                         help="Pre-trained models used as initialization for re-training (transfer learning)")
+    p_train.add_argument("-g", "--gpus", required=False, default=1, type=int,
+                         help="Number of GPUs used for training. Defaul=1")
 
     # -----------------------
     # inference
@@ -211,7 +216,7 @@ def metrics(Y_validation,predictions, num_classes, model, reportDir):
     return acc, f1, rec, pre
 
 
-def training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir):
+def training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir, base_models, unfreeze_last_n, gpus):
     dataTraining_dir = f"{output_directory}/data_for_training/"
     report_dir = f"{output_directory}/reports/"
     os.makedirs(dataTraining_dir, exist_ok=True)
@@ -252,6 +257,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
     model_metrics = {}
 
+    strategy = tf.distribute.MirroredStrategy() if gpus > 1 else tf.distribute.get_strategy()
     # Training PanTEon in-built models
     for model_name in models:
         start = time.time()
@@ -287,11 +293,73 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = np.array(to_categorical(Y_train, num_classes))
                 Y_dev_one_hot = np.array(to_categorical(Y_dev, num_classes))
 
-                batch_size = 512
+                batch_size = 100 # 512
                 num_epochs = 100
-                model = NeuralTE.get_model(work_dir, X_feature_len, num_classes)
 
-                history, _ = NeuralTE.run_experiment(model, X_train, Y_train_one_hot, X_dev, Y_dev_one_hot,
+                if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
+                    error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
+                          f"Please reduce the number of GPus or increase the number of samples.")
+
+                if base_models is not None and os.path.exists(f"{base_models}/NeuralTE_retrained_model.keras"):
+                    info(f"Initializing weights for {model_name} from {base_models}/NeuralTE_retrained_model.keras")
+
+                    with strategy.scope():
+                        model = load_model(f"{base_models}/NeuralTE_retrained_model.keras", compile=False,
+                                           custom_objects={"f1_m": NeuralTE.f1_m})
+
+                        if model.output_shape[-1] != int(num_classes):
+                            info(f"Replacing head: {model.output_shape[-1]} -> {int(num_classes)} classes")
+                            x = model.layers[-2].output
+                            new_out = Dense(num_classes, activation="softmax", name="new_classifier")(x)
+                            model = Model(inputs=model.input, outputs=new_out)
+
+                        # --- Stage 1: head-only (freeze everything but the head)
+                        for layer in model.layers:
+                            layer.trainable = False
+                        if model.get_layer("new_classifier") is not None:
+                            model.get_layer("new_classifier").trainable = True
+                        else:
+                            model.layers[-1].trainable = True
+
+                        model.compile(
+                            loss='categorical_crossentropy',
+                            optimizer='adam',
+                            metrics=[NeuralTE.f1_m]
+                        )
+
+                        head_epochs = min(20, num_epochs)  # short warm-up
+                        info(f"[{model_name}] Phase 1/2: head-only for {head_epochs} epochs")
+                    history_head, _ = NeuralTE.run_experiment(
+                        model, X_train, Y_train_one_hot, X_dev, Y_dev_one_hot,
+                        batch_size=batch_size, num_epochs=head_epochs
+                    )
+
+                    with strategy.scope():
+                    # --- Stage 2: fine-tune (Unfreeze last layer + low LR)
+                        for layer in model.layers[-unfreeze_last_n:]:
+                            layer.trainable = True
+
+                        model.compile(
+                            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                            loss='categorical_crossentropy',
+                            metrics=[NeuralTE.f1_m]
+                        )
+
+                        finetune_epochs = max(num_epochs - head_epochs, 1)
+                        info(
+                            f"[{model_name}] Phase 2/2: fine-tune last {unfreeze_last_n} layers for {finetune_epochs} epochs")
+                    history_ft, _ = NeuralTE.run_experiment(
+                        model, X_train, Y_train_one_hot, X_dev, Y_dev_one_hot,
+                        batch_size=batch_size, num_epochs=finetune_epochs
+                    )
+
+                    history = history_ft
+
+                else:
+                    with strategy.scope():
+                        model = NeuralTE.get_model(work_dir, X_feature_len, num_classes)
+
+                    history, _ = NeuralTE.run_experiment(model, X_train, Y_train_one_hot, X_dev, Y_dev_one_hot,
                                                      batch_size=batch_size, num_epochs=num_epochs)
 
                 model.save(output_directory+'/NeuralTE_retrained_model.keras')
@@ -301,6 +369,9 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 predicted_classes = np.argmax(predicted_classes, axis=1)
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "NeuralTE", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
+                # clean Tensorflow execution environment
+                tf.keras.backend.clear_session()
+                gc.collect()
 
         elif model_name == "CREATE":
             if os.path.exists(f'{output_directory}/CREATE_retrained_model.keras'):
@@ -313,21 +384,21 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 X_kmer_train = CREATE.get_kmer_data(training_fasta, k)
                 X_kmer_train = X_kmer_train.reshape(X_kmer_train.shape[0], 1, pow(4, k), 1)
-                X_kmer_train = X_kmer_train.astype("float64")
+                X_kmer_train = X_kmer_train.astype("float32")
 
                 X_oh_train = CREATE.get_oh_data(training_fasta, l)
                 Y_train = CREATE.get_label_data(training_fasta)
 
                 X_kmer_dev = CREATE.get_kmer_data(val_fasta, k)
                 X_kmer_dev = X_kmer_dev.reshape(X_kmer_dev.shape[0], 1, pow(4, k), 1)
-                X_kmer_dev = X_kmer_dev.astype("float64")
+                X_kmer_dev = X_kmer_dev.astype("float32")
 
                 X_oh_dev = CREATE.get_oh_data(val_fasta, l)
                 Y_dev = CREATE.get_label_data(val_fasta)
 
                 X_kmer_test = CREATE.get_kmer_data(test_fasta, k)
                 X_kmer_test = X_kmer_test.reshape(X_kmer_test.shape[0], 1, pow(4, k), 1)
-                X_kmer_test = X_kmer_test.astype("float64")
+                X_kmer_test = X_kmer_test.astype("float32")
 
                 X_oh_test = CREATE.get_oh_data(test_fasta, l)
                 Y_test = CREATE.get_label_data(test_fasta)
@@ -335,8 +406,76 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = to_categorical(Y_train, int(num_classes))
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
 
-                model, history = CREATE.run_experiment(X_oh_train, X_oh_dev, X_kmer_train, X_kmer_dev, Y_train_one_hot,
-                                                       Y_dev_one_hot, num_classes, k, l)
+                batch_size = 32
+                num_epochs = 10
+
+                if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
+                    error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
+                          f"Please reduce the number of GPus or increase the number of samples.")
+
+                if base_models is not None and os.path.exists(f"{base_models}/CREATE_retrained_model.keras"):
+                    info(f"Initializing weights for {model_name} from {base_models}/CREATE_retrained_model.keras")
+                    superf_dict_old, inv_superf_dict_old, num_classes_old, min_prob_old, species_group_old = load_config(
+                        f"{base_models}/training_variables.json")
+
+                    with strategy.scope():
+                        model, attention_model = CREATE.create_attn_model(k, l, num_classes_old)
+                        model.load_weights(f"{base_models}/CREATE_retrained_model.keras")
+
+                        if model.output_shape[-1] != int(num_classes):
+                            info(f"Replacing head: {model.output_shape[-1]} -> {int(num_classes)} classes")
+                            x = model.layers[-2].output
+                            new_out = Dense(num_classes, activation="softmax", name="new_classifier")(x)
+                            model = Model(inputs=model.inputs, outputs=new_out)
+
+                        # --- Stage 1: head-only (freeze everything but the head)
+                        for layer in model.layers:
+                            layer.trainable = False
+                        if model.get_layer("new_classifier") is not None:
+                            model.get_layer("new_classifier").trainable = True
+                        else:
+                            model.layers[-1].trainable = True
+
+                        head_epochs = min(2, num_epochs)  # short warm-up
+                        info(f"[{model_name}] Phase 1/2: head-only for {head_epochs} epochs")
+                        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+                                      loss="categorical_crossentropy",
+                                      metrics=[CREATE.f1_m])
+
+                    history_head = CREATE.run_experiment(
+                        model, X_oh_train, X_oh_dev,
+                        X_kmer_train, X_kmer_dev,
+                        Y_train_one_hot,
+                        Y_dev_one_hot, num_classes, k, l, batch_size, head_epochs
+                    )
+
+                    with strategy.scope():
+                        # --- Stage 2: fine-tune (Unfreeze last layer + low LR)
+                        for layer in model.layers[-unfreeze_last_n:]:
+                            layer.trainable = True
+
+                        finetune_epochs = max(num_epochs - head_epochs, 1)
+                        info(
+                            f"[{model_name}] Phase 2/2: fine-tune last {unfreeze_last_n} layers for {finetune_epochs} epochs")
+                        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+                                      loss="categorical_crossentropy",
+                                      metrics=[CREATE.f1_m])
+                    history_ft = CREATE.run_experiment(
+                        model, X_oh_train, X_oh_dev,
+                        X_kmer_train, X_kmer_dev,
+                        Y_train_one_hot,
+                        Y_dev_one_hot, num_classes, k, l, batch_size, finetune_epochs
+                    )
+
+                    history = history_ft
+
+                else:
+                    with strategy.scope():
+                        model, attention_model = CREATE.create_attn_model(k, l, num_classes)
+                        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="categorical_crossentropy",
+                                      metrics=[CREATE.f1_m])
+                    history = CREATE.run_experiment(model, X_oh_train, X_oh_dev, X_kmer_train, X_kmer_dev, Y_train_one_hot,
+                                                       Y_dev_one_hot, num_classes, k, l, batch_size, num_epochs)
 
                 model.save(f'{output_directory}/CREATE_retrained_model.keras')
                 plot_training_metrics(history, "CREATE", report_dir)
@@ -345,6 +484,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 predicted_classes = np.argmax(predicted_classes, axis=1)
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "CREATE", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
+
+                # clean Tensorflow execution environment
+                tf.keras.backend.clear_session()
+                gc.collect()
 
         elif model_name == "ClassifyTE":
             if os.path.exists(f"{output_directory}/ClassifyTE_retrained_model.pkl"):
@@ -355,7 +498,12 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 X_train, Y_train = ClassifyTE.load_data(training_fasta, threads, "T")
                 X_test, Y_test = ClassifyTE.load_data(test_fasta, threads, "T")
-                model = ClassifyTE.get_model()
+
+                if base_models is not None and os.path.exists(f"{base_models}/ClassifyTE_retrained_model.pkl"):
+                    info(f"Initializing weights for {model_name} from {base_models}/ClassifyTE_retrained_model.pkl")
+                    model = joblib.load(f"{base_models}/ClassifyTE_retrained_model.pkl")
+                else:
+                    model = ClassifyTE.get_model()
                 ClassifyTE.run_experiment(model, X_train, Y_train)
 
                 joblib.dump(model, f"{output_directory}/ClassifyTE_retrained_model.pkl")
@@ -383,10 +531,75 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = to_categorical(Y_train, int(num_classes))
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
 
-                batch_size = 512
+                batch_size = 100 # 512
                 num_epochs = 100
-                model = DeepTE.get_model(num_classes)
-                history = DeepTE.run_experiment(model, X_train, Y_train_one_hot, Y_train, X_dev, Y_dev_one_hot, batch_size,
+                if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
+                    error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
+                          f"Please reduce the number of GPus or increase the number of samples.")
+
+                if base_models is not None and os.path.exists(f"{base_models}/DeepTE_retrained_model.keras"):
+                    info(f"Initializing weights for {model_name} from {base_models}/DeepTE_retrained_model.keras")
+
+                    with strategy.scope():
+                        model = load_model(f"{base_models}/DeepTE_retrained_model.keras", compile=False,
+                                           custom_objects={"f1_m": DeepTE.f1_m})
+
+                        if model.output_shape[-1] != int(num_classes):
+                            info(f"Replacing head: {model.output_shape[-1]} -> {int(num_classes)} classes")
+                            new_model = Sequential(name=f"{model.name}_tl")
+                            for layer in model.layers[:-1]:
+                                new_model.add(layer)
+
+                            new_model.add(Dense(int(num_classes), activation="softmax", name="new_classifier"))
+
+                            model = new_model
+                        # --- Stage 1: head-only (freeze everything but the head)
+                        for layer in model.layers:
+                            layer.trainable = False
+                        if model.get_layer("new_classifier") is not None:
+                            model.get_layer("new_classifier").trainable = True
+                        else:
+                            model.layers[-1].trainable = True
+
+                        model.compile(
+                            loss='categorical_crossentropy',
+                            optimizer='adam',
+                            metrics=[DeepTE.f1_m]
+                        )
+
+                        head_epochs = min(20, num_epochs)  # short warm-up
+                        info(f"[{model_name}] Phase 1/2: head-only for {head_epochs} epochs")
+
+                    history_head = DeepTE.run_experiment(
+                        model, X_train, Y_train_one_hot, Y_train, X_dev, Y_dev_one_hot,
+                        batch_size, head_epochs
+                    )
+
+                    with strategy.scope():
+                        # --- Stage 2: fine-tune (Unfreeze last layer + low LR)
+                        for layer in model.layers[-unfreeze_last_n:]:
+                            layer.trainable = True
+
+                        model.compile(
+                            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                            loss='categorical_crossentropy',
+                            metrics=[DeepTE.f1_m]
+                        )
+
+                        finetune_epochs = max(num_epochs - head_epochs, 1)
+                        info(
+                            f"[{model_name}] Phase 2/2: fine-tune last {unfreeze_last_n} layers for {finetune_epochs} epochs")
+
+                    history_ft = DeepTE.run_experiment(
+                        model, X_train, Y_train_one_hot, Y_train, X_dev, Y_dev_one_hot,
+                        batch_size, finetune_epochs
+                    )
+
+                    history = history_ft
+                else:
+                    with strategy.scope():
+                        model = DeepTE.get_model(num_classes)
+                    history = DeepTE.run_experiment(model, X_train, Y_train_one_hot, Y_train, X_dev, Y_dev_one_hot, batch_size,
                                                 num_epochs)
 
                 model.save(output_directory+'/DeepTE_retrained_model.keras')
@@ -396,6 +609,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 predicted_classes = np.argmax(predicted_classes, axis=1)
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "DeepTE", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
+
+                # clean Tensorflow execution environment
+                tf.keras.backend.clear_session()
+                gc.collect()
 
         elif model_name == "TERL":
             if os.path.exists(f"{output_directory}/TERL_Classify_retrained_model"):
@@ -410,7 +627,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 X_test, _ = TERL.data_handler(test_fasta, max_len=max_len, mode="P")
                 Y_test = TERL.get_label_data(test_fasta)
 
-                classes = np.unique(Y_train).tolist()
+                classes = np.unique(np.concatenate([Y_train, Y_dev, Y_test])).tolist()
+                num_classes_terl = len(classes)
                 vocab_size = len(['A', 'C', 'G', 'T', 'N', 5])  # 5 is the background signal for padding
                 shuffled = np.random.permutation(range(Y_train.shape[0]))
                 X_train = X_train[shuffled]
@@ -431,6 +649,16 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 epochs = 50
                 dropout = 0.5
 
+                based_weights = ""
+                if base_models is not None and os.path.exists(f"{base_models}/TERL_Classify_retrained_model"):
+                    superf_dict_old, inv_superf_dict_old, num_classes_old, min_prob_old, species_group_old = load_config(
+                        f"{base_models}/training_variables.json")
+                    if int(num_classes_terl) == int(num_classes_old):
+                        based_weights = f"{base_models}/TERL_Classify_retrained_model"
+                    else:
+                        info(
+                            f"[TERL] Disabling based_weights: base expects {num_classes} but current data has {num_classes_terl} classes.")
+
                 labels, predictions, accuracies, best_result, training_time, training_out = TERL.train_evaluate(
                     X_train,
                     Y_train,
@@ -439,13 +667,14 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     vocab_size,
                     max_len,
                     classes,
-                    num_classes,
+                    num_classes_terl,
                     architecture, activation_functions, widths,
                     strides, dilations, feature_maps,
                     TERL.get_optimizer(optimizer, learning_rate),
                     l2, train_batch_size, test_batch_size,
                     epochs, dropout,
-                    output_file=f"{output_directory}/TERL_Classify_retrained_model"
+                    output_file=f"{output_directory}/TERL_Classify_retrained_model",
+                    based_weights = based_weights
                 )
 
                 if os.path.exists(f"{output_directory}/TERL_Classify_retrained_model"):
@@ -487,14 +716,23 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 X_train, Y_train = Inpactor2_Class.load_data(training_fasta)
                 X_dev, Y_dev = Inpactor2_Class.load_data(val_fasta)
                 X_test, Y_test = Inpactor2_Class.load_data(test_fasta)
-                scaler = preprocessing.StandardScaler().fit(X_train)
+                if base_models is not None and os.path.exists(f"{base_models}/scaler.pkl"):
+                    info(f"Initializing weights for Scaling at {model_name} from {base_models}/scaler.pkl")
+                    scaler = joblib.load(f"{base_models}/scaler.pkl")
+                else:
+                    scaler = preprocessing.StandardScaler().fit(X_train)
                 X_train_scaled = scaler.transform(X_train)
                 X_dev_scaled = scaler.transform(X_dev)
                 X_test_scaled = scaler.transform(X_test)
                 joblib.dump(scaler, f"{output_directory}/scaler.pkl")
 
-                pca = decomposition.PCA(n_components=0.96, svd_solver='full')
-                pca.fit(X_train_scaled)
+                if base_models is not None and os.path.exists(f"{base_models}/pca.pkl"):
+                    info(f"Initializing weights for PCA at {model_name} from {base_models}/pca.pkl")
+                    pca = joblib.load(f"{base_models}/pca.pkl")
+                else:
+                    pca = decomposition.PCA(n_components=0.96, svd_solver='full')
+                    pca.fit(X_train_scaled)
+
                 X_train_pca = pca.transform(X_train_scaled)
                 X_dev_pca = pca.transform(X_dev_scaled)
                 X_test_pca = pca.transform(X_test_scaled)
@@ -504,10 +742,74 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
                 Y_test_one_hot = to_categorical(Y_test, int(num_classes))
 
-                batch_size = 512
+                batch_size = 100 # 512
                 num_epochs = 200
-                model = Inpactor2_Class.get_model(X_train_pca.shape[1], num_classes)
-                history = Inpactor2_Class.run_experiment(model, X_train_pca, Y_train_one_hot, Y_train, X_dev_pca,
+                if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0], Y_test_one_hot.shape[0]):
+                    error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
+                          f"Please reduce the number of GPus or increase the number of samples.")
+
+                if base_models is not None and os.path.exists(f"{base_models}/Inpactor2_Class_retrained_model.keras"):
+                    info(f"Initializing weights for {model_name} from {base_models}/Inpactor2_Class_retrained_model.keras")
+                    with strategy.scope():
+                        model = load_model(f"{base_models}/Inpactor2_Class_retrained_model.keras", compile=False,
+                                           custom_objects={"f1_m": Inpactor2_Class.f1_m})
+
+                        if model.output_shape[-1] != int(num_classes):
+                            info(f"Replacing head: {model.output_shape[-1]} -> {int(num_classes)} classes")
+                            x = model.layers[-2].output
+                            new_out = Dense(num_classes, activation="softmax", name="new_classifier")(x)
+                            model = Model(inputs=model.input, outputs=new_out)
+
+                        # --- Stage 1: head-only (freeze everything but the head)
+                        for layer in model.layers:
+                            layer.trainable = False
+                        if model.get_layer("new_classifier") is not None:
+                            model.get_layer("new_classifier").trainable = True
+                        else:
+                            model.layers[-1].trainable = True
+
+                        model.compile(
+                            optimizer=tf.keras.optimizers.Adam(0.001),
+                            loss=tf.keras.losses.CategoricalCrossentropy(),
+                            metrics=[Inpactor2_Class.f1_m]
+                        )
+
+                        head_epochs = min(20, num_epochs)  # short warm-up
+                        info(f"[{model_name}] Phase 1/2: head-only for {head_epochs} epochs")
+                    history_head = Inpactor2_Class.run_experiment(
+                        model, X_train_pca, Y_train_one_hot, Y_train,
+                        X_dev_pca, Y_dev_one_hot,
+                        batch_size=batch_size, num_epochs=head_epochs
+                    )
+
+                    with strategy.scope():
+                        # --- Stage 2: fine-tune (Unfreeze last layer + low LR)
+                        for layer in model.layers[-unfreeze_last_n:]:
+                            layer.trainable = True
+
+                        model.compile(
+                            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                            loss=tf.keras.losses.CategoricalCrossentropy(),
+                            metrics=[Inpactor2_Class.f1_m]
+                        )
+
+                        finetune_epochs = max(num_epochs - head_epochs, 1)
+                        info(
+                            f"[{model_name}] Phase 2/2: fine-tune last {unfreeze_last_n} layers for {finetune_epochs} epochs")
+
+                    history_ft = Inpactor2_Class.run_experiment(
+                        model, X_train_pca, Y_train_one_hot, Y_train,
+                        X_dev_pca, Y_dev_one_hot,
+                        batch_size=batch_size, num_epochs=finetune_epochs
+                    )
+
+                    history = history_ft
+
+                else:
+                    with strategy.scope():
+                        model = Inpactor2_Class.get_model(X_train_pca.shape[1], num_classes)
+
+                    history = Inpactor2_Class.run_experiment(model, X_train_pca, Y_train_one_hot, Y_train, X_dev_pca,
                                                             Y_dev_one_hot, batch_size=batch_size, num_epochs=num_epochs)
 
                 model.save(f"{output_directory}/Inpactor2_Class_retrained_model.keras")
@@ -518,11 +820,14 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "Inpactor2_Class", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
 
+                # clean Tensorflow execution environment
+                tf.keras.backend.clear_session()
+                gc.collect()
+
         elif model_name == "Terrier":
             if os.path.exists(f"{output_directory}/Terrier_retrained_model.pt"):
                 info(f"Using the found model at {output_directory}/Terrier_retrained_model.pt. Skipping retraining....")
             else:
-                # quick check
                 for fasta_f in [training_fasta, val_fasta, test_fasta]:
                     bad_seqs = [x for x in SeqIO.parse(fasta_f, "fasta") if "/" not in x.id]
                     if len(bad_seqs) > 0:
@@ -556,6 +861,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 test_dataset = Terrier.TransposonDataset(X_test, Y_test)
 
                 batch_size = 32
+                num_epochs = 100
                 vocab_size = len("ACGTN") + 1
                 dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
@@ -563,8 +869,65 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 dev_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0)
                 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, num_workers=0)
 
-                model = Terrier.TerrierNet(root=root, vocab_size=vocab_size)
-                model, history = Terrier.run_experiment(model, root, train_loader, dev_loader, dev, 100, 1e-3, patience=10,
+                if base_models is not None and os.path.exists(f"{base_models}/Terrier_retrained_model.pt"):
+                    info(f"Initializing weights for {model_name} from {base_models}/Terrier_retrained_model.pt")
+                    model = Terrier.TerrierNet(root=root, vocab_size=vocab_size)
+                    state = torch.load(f"{base_models}/Terrier_retrained_model.pt", map_location=dev)
+
+                    # 1) Load weights only from backbone (embedding/conv/penultimate).
+                    model.hsoftmax = Terrier.HierarchicalSoftmaxLazyLinear(root=root)
+                    model = model.to(dev)
+
+                    if isinstance(state, dict) and "state_dict" in state:
+                        state = state["state_dict"]
+
+                    model_state = model.state_dict()
+                    copied, skipped = 0, 0
+                    for k, v in state.items():
+                        if k.startswith("embedding.") or k.startswith("conv.") or k.startswith("penultimate."):
+                            if k in model_state and model_state[k].shape == v.shape:
+                                model_state[k] = v
+                                copied += 1
+                            else:
+                                skipped += 1
+                    model.load_state_dict(model_state, strict=False)
+                    info(f"Terrier TL: copied {copied} backbone tensors; skipped {skipped}. (hsoftmax not loaded)")
+
+                    # 2) Stage 1: Head-only (Train only hsoftmax; and penultimateto adapt representation)
+                    for p in model.parameters():
+                        p.requires_grad = False
+                    for p in model.hsoftmax.parameters():
+                        p.requires_grad = True
+
+                    for p in model.penultimate.parameters():
+                        p.requires_grad = True
+
+                    head_epochs = min(20, num_epochs)
+                    info(f"Terrier TL Phase 1/2: head-only ({head_epochs} epochs) lr=1e-3")
+                    model, history_head = Terrier.run_experiment(
+                        model, root, train_loader, dev_loader, dev,
+                        head_epochs, 1e-3, patience=10, weight_decay=0.0
+                    )
+
+                    # 3) Stage 2: Fine-tune (unfreeze conv + penultimate + head with lower LR)
+                    for p in model.parameters():
+                        p.requires_grad = False
+                    for p in model.conv.parameters():
+                        p.requires_grad = True
+                    for p in model.penultimate.parameters():
+                        p.requires_grad = True
+                    for p in model.hsoftmax.parameters():
+                        p.requires_grad = True
+
+                    finetune_epochs = num_epochs - head_epochs
+                    info(f"Terrier TL Phase 2/2: fine-tune ({finetune_epochs} epochs) lr=1e-4")
+                    model, history = Terrier.run_experiment(
+                        model, root, train_loader, dev_loader, dev,
+                        finetune_epochs, 1e-4, patience=10, weight_decay=0.0
+                    )
+                else:
+                    model = Terrier.TerrierNet(root=root, vocab_size=vocab_size)
+                    model, history = Terrier.run_experiment(model, root, train_loader, dev_loader, dev, num_epochs, 1e-3, patience=10,
                                                 weight_decay=0.0)
 
                 torch.save(model.state_dict(), f"{output_directory}/Terrier_retrained_model.pt")
@@ -584,14 +947,11 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 test_logits = torch.cat(test_logits_list, dim=0)
                 test_targets = torch.cat(test_targets_list, dim=0)
 
-                # Reportes con etiquetas legibles
-                # Predicciones greedy al nivel de hojas (superfamilia) y al nivel 1 (orden)
-
                 pred_nodes = greedy_predictions(test_logits, root)  # lista de nodos (hojas)
                 y_pred_superf_labels = [n.name.replace("SUPERF::", "") for n in pred_nodes]
                 y_true_superf_labels = [leaf_id_to_label[int(i)] for i in test_targets.numpy().tolist()]
                 inv = sorted(set(list(y_true_superf_labels) + list(y_pred_superf_labels)))
-                # Mapear a índices compactos para matriz de confusión
+
                 label_to_idx = {lab: i for i, lab in enumerate(inv)}
                 y_true_idx = np.array([label_to_idx[l] for l in y_true_superf_labels], dtype=int)
                 y_pred_idx = np.array([label_to_idx[l] for l in y_pred_superf_labels], dtype=int)
@@ -632,9 +992,69 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 batch_size = 64
                 num_epochs = 50
-                model = BERTE.get_model(input_4mer_shape, input_5mer_shape, input_6mer_shape, num_classes)
+                if batch_size * gpus > min(X_train_4mer.shape[0], X_val_4mer.shape[0], X_test_4mer.shape[0]):
+                    error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
+                          f"Please reduce the number of GPus or increase the number of samples.")
 
-                history = BERTE.run_experiment(model, X_train, y_train_onehot, X_dev, y_val_onehot, batch_size=batch_size,
+                if base_models is not None and os.path.exists(f"{base_models}/BERTE_retrained_model.keras"):
+                    info(f"Initializing weights for {model_name} from {base_models}/BERTE_retrained_model.keras")
+                    with strategy.scope():
+                        model = load_model(f"{base_models}/BERTE_retrained_model.keras", compile=False,
+                                           custom_objects={"f1_m": BERTE.f1_m})
+
+                        if model.output_shape[-1] != int(num_classes):
+                            info(f"Replacing head: {model.output_shape[-1]} -> {int(num_classes)} classes")
+                            x = model.layers[-2].output
+                            new_out = Dense(num_classes, activation="softmax", name="new_classifier")(x)
+                            model = Model(inputs=model.input, outputs=new_out)
+                        # --- Stage 1: head-only (freeze everything but the head)
+                        for layer in model.layers:
+                            layer.trainable = False
+                        if model.get_layer("new_classifier") is not None:
+                            model.get_layer("new_classifier").trainable = True
+                        else:
+                            model.layers[-1].trainable = True
+
+                        model.compile(
+                            loss=tf.keras.losses.CategoricalCrossentropy(),
+                            optimizer=tf.keras.optimizers.AdamW(learning_rate=0.001, weight_decay=1e-4),
+                            metrics=[BERTE.f1_m]
+                        )
+
+                        head_epochs = min(20, num_epochs)  # short warm-up
+                        info(f"[{model_name}] Phase 1/2: head-only for {head_epochs} epochs")
+
+                    history_head = BERTE.run_experiment(
+                        model, X_train, y_train_onehot, X_dev, y_val_onehot,
+                        batch_size=batch_size, num_epochs=head_epochs
+                    )
+
+                    with strategy.scope():
+                        # --- Stage 2: fine-tune (Unfreeze last layer + low LR)
+                        for layer in model.layers[-unfreeze_last_n:]:
+                            layer.trainable = True
+
+                        model.compile(
+                            optimizer=tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4),
+                            loss=tf.keras.losses.CategoricalCrossentropy(),
+                            metrics=[BERTE.f1_m]
+                        )
+
+                        finetune_epochs = max(num_epochs - head_epochs, 1)
+                        info(
+                            f"[{model_name}] Phase 2/2: fine-tune last {unfreeze_last_n} layers for {finetune_epochs} epochs")
+
+                    history_ft = BERTE.run_experiment(
+                        model, X_train, y_train_onehot, X_dev, y_val_onehot,
+                        batch_size=batch_size, num_epochs=finetune_epochs
+                    )
+
+                    history = history_ft
+                else:
+                    with strategy.scope():
+                        model = BERTE.get_model(input_4mer_shape, input_5mer_shape, input_6mer_shape, num_classes)
+
+                    history = BERTE.run_experiment(model, X_train, y_train_onehot, X_dev, y_val_onehot, batch_size=batch_size,
                                          num_epochs=num_epochs)
 
                 model.save(f"{output_directory}/BERTE_retrained_model.keras")
@@ -644,6 +1064,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 predicted_classes = np.argmax(predicted_classes, axis=1)
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "BERTE", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
+
+                # clean Tensorflow execution environment
+                tf.keras.backend.clear_session()
+                gc.collect()
 
         elif model_name == "TEClass2":
             if os.path.exists(f"{output_directory}/TEClass2_retrained_model"):
@@ -660,9 +1084,9 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     fp16=False,
                     output_dir=work_dir,
                     num_train_epochs=100,  # 100
-                    per_device_train_batch_size=210,  # 210
+                    per_device_train_batch_size=300,  # 210
                     gradient_accumulation_steps=4,
-                    per_device_eval_batch_size=210,  # 210
+                    per_device_eval_batch_size=300,  # 210
                     eval_strategy="steps",
                     eval_steps=2000,
                     eval_accumulation_steps=10,
@@ -701,26 +1125,187 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 dataset_test = TEClass2.TransposonDataset(dataset_test, datadict_, tokenizer)
 
                 vocab_file = TEClass2.load_vocab(f"{PanTEon_dir}/data/5mer_vocab")
-                model = TEClass2.get_model(vocab_file, num_classes)
-                total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                info(f"Total trainable parameters:  {total_trainable:,}")
+                if base_models is not None and os.path.exists(f"{base_models}/TEClass2_retrained_model"):
+                    info(f"Initializing weights for {model_name} from {base_models}/TEClass2_retrained_model")
+                    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                    model = LongformerForSequenceClassification.from_pretrained(
+                        f"{base_models}/TEClass2_retrained_model",
+                        num_labels=int(num_classes),
+                        ignore_mismatched_sizes=True,
+                        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                    ).to(device)
+                    dtype_ref = next(model.longformer.parameters()).dtype
+                    model.classifier = model.classifier.to(dtype=dtype_ref)
 
-                model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-                model.config.use_cache = False
+                    # 1) To be sure that head coincides with num_classes (if not, replace)
+                    old_out = getattr(model.config, "num_labels", None)
+                    if old_out is None:
+                        old_out = model.classifier.out_features if hasattr(model, "classifier") else None
 
-                sample_weight = dataset_train.sample_weight
-                # instantiate the trainer class
-                trainer = TEClass2.DNAFormer_Trainer(
-                    sample_weight=sample_weight,
-                    model=model,
-                    args=training_args,
-                    compute_metrics=TEClass2.compute_metrics,
-                    train_dataset=dataset_train,
-                    eval_dataset=dataset_valid
-                )
+                    if old_out is not None and int(old_out) != int(num_classes):
+                        info(f"Replacing classification head: {old_out} -> {int(num_classes)} classes")
 
-                train_result = trainer.train()
-                info(f"{train_result}")
+                        # To get hidden size from backbone
+                        hidden_size = None
+                        if hasattr(model.config, "hidden_size") and model.config.hidden_size is not None:
+                            hidden_size = model.config.hidden_size
+                        elif hasattr(model.config, "d_model") and model.config.d_model is not None:
+                            hidden_size = model.config.d_model
+                        else:
+                            # fallback: Trying to infer from existing head
+                            if hasattr(model, "classifier") and hasattr(model.classifier, "in_features"):
+                                hidden_size = model.classifier.in_features
+                            elif hasattr(model, "score") and hasattr(model.score, "in_features"):
+                                hidden_size = model.score.in_features
+
+                        if hidden_size is None:
+                            raise RuntimeError("Cannot infer hidden size to rebuild classification head.")
+
+                        # To replace head (classifier)
+                        if hasattr(model, "classifier"):
+                            model.classifier = torch.nn.Linear(
+                                hidden_size, int(num_classes),
+                                device=device, dtype=dtype_ref
+                            )
+                        elif hasattr(model, "score"):
+                            model.score = torch.nn.Linear(
+                                hidden_size, int(num_classes),
+                                device=device, dtype=dtype_ref
+                            )
+                        else:
+                            raise RuntimeError("Model has no known classification head attribute (classifier/score).")
+
+                        model.config.num_labels = int(num_classes)
+
+                        if hasattr(model, "num_labels"):
+                            model.num_labels = int(num_classes)
+
+                    # 2) Phase 1: head-only (freeze backbone)
+                    for p in model.parameters():
+                        p.requires_grad = False
+
+                    # To keep head trainable
+                    if hasattr(model, "classifier"):
+                        for p in model.classifier.parameters():
+                            p.requires_grad = True
+                    if hasattr(model, "score"):
+                        for p in model.score.parameters():
+                            p.requires_grad = True
+
+                    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                    model.config.use_cache = False
+
+                    training_args.num_train_epochs = 10
+                    training_args.learning_rate = 1e-3
+                    training_args.warmup_steps = 200
+                    training_args.weight_decay = 0.01
+
+                    sample_weight = dataset_train.sample_weight
+
+                    trainer = TEClass2.DNAFormer_Trainer(
+                        sample_weight=sample_weight,
+                        model=model,
+                        args=training_args,
+                        compute_metrics=TEClass2.compute_metrics,
+                        train_dataset=dataset_train,
+                        eval_dataset=dataset_valid
+                    )
+
+                    info("TEClass2 TL Phase 1/2: head-only training")
+                    train_result = trainer.train()
+                    info(f"{train_result}")
+
+                    # 3) Phase 2: fine-tune (unfreeze last N encoder layers + head) with low LR
+                    for p in model.parameters():
+                        p.requires_grad = False
+
+                    if hasattr(model, "classifier"):
+                        for p in model.classifier.parameters():
+                            p.requires_grad = True
+                    if hasattr(model, "score"):
+                        for p in model.score.parameters():
+                            p.requires_grad = True
+
+                    # Trying to unfreeze last layers from encoder (if they exist)
+                    # (BERT-like: model.bert.encoder.layer, RoBERTa-like: model.roberta.encoder.layer, etc.)
+                    n_unfreeze = 2
+                    unfrozen = 0
+
+                    base_attr = None
+                    if hasattr(model, "bert"):
+                        base_attr = model.bert
+                    elif hasattr(model, "roberta"):
+                        base_attr = model.roberta
+                    elif hasattr(model, "deberta"):
+                        base_attr = model.deberta
+                    elif hasattr(model, "electra"):
+                        base_attr = model.electra
+                    elif hasattr(model, "transformer"):
+                        base_attr = model.transformer
+                    else:
+                        # generic fallback
+                        base_attr = getattr(model, "base_model", None)
+
+                    if base_attr is not None and hasattr(base_attr, "encoder") and hasattr(base_attr.encoder, "layer"):
+                        layers = base_attr.encoder.layer
+                        for layer in layers[-n_unfreeze:]:
+                            for p in layer.parameters():
+                                p.requires_grad = True
+                                unfrozen += p.numel()
+                    elif base_attr is not None and hasattr(base_attr, "encoder") and hasattr(base_attr.encoder,
+                                                                                             "layers"):
+                        layers = base_attr.encoder.layers
+                        for layer in layers[-n_unfreeze:]:
+                            for p in layer.parameters():
+                                p.requires_grad = True
+                                unfrozen += p.numel()
+                    else:
+                        info("Could not locate encoder layers to unfreeze; fine-tuning will train only head.")
+
+                    # Update args to Phase 2
+                    training_args.num_train_epochs = 90
+                    training_args.learning_rate = 1e-4
+                    training_args.warmup_steps = 200
+                    training_args.weight_decay = 0.01
+
+                    trainer = TEClass2.DNAFormer_Trainer(
+                        sample_weight=sample_weight,
+                        model=model,
+                        args=training_args,
+                        compute_metrics=TEClass2.compute_metrics,
+                        train_dataset=dataset_train,
+                        eval_dataset=dataset_valid
+                    )
+
+                    info(f"TEClass2 TL Phase 2/2: fine-tuning (unfroze approx params: {unfrozen:,})")
+                    train_result = trainer.train()
+                    info(f"{train_result}")
+
+                else:
+                    model = TEClass2.get_model(vocab_file, num_classes)
+                    if torch.cuda.is_available():
+                        model = model.to(dtype=torch.bfloat16)
+                    dtype_ref = next(model.longformer.parameters()).dtype
+                    model.classifier = model.classifier.to(dtype=dtype_ref)
+                    total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                    info(f"Total trainable parameters:  {total_trainable:,}")
+
+                    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                    model.config.use_cache = False
+
+                    sample_weight = dataset_train.sample_weight
+                    # instantiate the trainer class
+                    trainer = TEClass2.DNAFormer_Trainer(
+                        sample_weight=sample_weight,
+                        model=model,
+                        args=training_args,
+                        compute_metrics=TEClass2.compute_metrics,
+                        train_dataset=dataset_train,
+                        eval_dataset=dataset_valid
+                    )
+
+                    train_result = trainer.train()
+                    info(f"{train_result}")
 
                 trainer.save_model(f"{output_directory}/TEClass2_retrained_model")
 
@@ -774,7 +1359,17 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
             info(f"Training the custom model {model_name} with epochs={num_epochs} and batch size={batch_size}")
 
-            model = custom_model.get_model(X_train.shape[1], num_classes)
+            if base_models is not None:
+                if custom_model.DL_FRAMEWORK.lower() == "tensorflow" and os.path.exists(f"{base_models}/{model_name}_retrained_model.keras"):
+                    model = load_model(f"{base_models}/{model_name}_retrained_model.keras", compile=False)
+                elif custom_model.DL_FRAMEWORK.lower()  == "pytorch" and os.path.exists(f"{base_models}/{model_name}_retrained_model.pt"):
+                    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    model = custom_model.get_model(X_train.shape[1], num_classes).to(device)
+                    state = torch.load(f'{base_models}/{model_name}_retrained_model.pt', map_location=device)
+                    model.load_state_dict(state)
+            else:
+                model = custom_model.get_model(X_train.shape[1], num_classes)
+
             history = custom_model.run_experiment(model, X_train, Y_train_one_hot, Y_train, X_dev, Y_dev_one_hot, batch_size,
                                             num_epochs)
 
@@ -822,7 +1417,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
 def inference(fasta_file, work_dir, threads, class_num, models, output_directory, inv_superf_dict, prefix, min_prob, custom_registry, PanTEon_dir):
 
-    dict_predictions = {TE.id.split("#")[0]: [] for TE in SeqIO.parse(TE_library, "fasta")}
+    dict_predictions = {TE.id.split("#")[0]: [] for TE in SeqIO.parse(fasta_file, "fasta")}
     used_models = ["SeqID"]
 
     # Inference with PanTEon in-built models
@@ -994,11 +1589,11 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
                 model = load_model(f"{output_directory}/BERTE_retrained_model.keras", compile=False)
                 y_preds_probs = model.predict(X_dataset)
             else:
-                error(f"{model_name}'s trained model was not found (at path {output_directory}/Inpactor2_Class_retrained_model.keras). Have you trained this model before (using the training module)? ")
+                error(f"{model_name}'s trained model was not found (at path {output_directory}/BERTE_retrained_model.keras). Have you trained this model before (using the training module)? ")
 
         elif model_name == "TEClass2":
             if os.path.exists(f"{output_directory}/TEClass2_retrained_model"):
-                dataset_predict, datadict_, labels = TEClass2.load_data(TE_library, 'P')
+                dataset_predict, datadict_, labels = TEClass2.load_data(fasta_file, 'P')
                 tokenizer = TEClass2.tokenizer_fun(PanTEon_dir)
                 new_dataset = TEClass2.TransposonDataset(dataset_predict, datadict_, tokenizer, train=False)
 
@@ -1037,7 +1632,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
                 y_preds_probs = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
 
             else:
-                error(f"{model_name}'s trained model was not found (at path {output_directory}/Inpactor2_Class_retrained_model.keras). Have you trained this model before (using the training module)? ")
+                error(f"{model_name}'s trained model was not found (at path {output_directory}/TEClass2_retrained_model). Have you trained this model before (using the training module)? ")
 
         if model_name == "Terrier":
             y_pred_idx = [int(n.name.replace("SUPERF::", "").split("::")[1]) for n in pred_nodes]
@@ -1057,7 +1652,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
         df.to_csv(f"{prefix}_PanTEon_{model_name}.csv", index=False)
 
         final_seqs = []
-        for TE in SeqIO.parse(TE_library, "fasta"):
+        for TE in SeqIO.parse(fasta_file, "fasta"):
             # remove previous classification if any
             original_name = TE.id.split("#")[0]
             position = labels.index(TE.id)
@@ -1076,7 +1671,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
         end = time.time()
         info(f"{model_name}'s Prediction done!! [{end - start}]......")
 
-    # Training custom (user-made) models
+    # Inference with custom (user-made) models
     for model_name in custom_registry:
         custom_model = custom_registry[model_name]
         start = time.time()
@@ -1123,7 +1718,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
         df.to_csv(f"{prefix}_PanTEon_{model_name}.csv", index=False)
 
         final_seqs = []
-        for TE in SeqIO.parse(TE_library, "fasta"):
+        for TE in SeqIO.parse(fasta_file, "fasta"):
             # remove previous classification if any
             original_name = TE.id.split("#")[0]
             position = labels.index(TE.id)
@@ -1543,6 +2138,7 @@ if __name__ == '__main__':
     args = parse_args()
     module = args.module.lower()
     PanTEon_dir = os.path.dirname(os.path.abspath(__file__))
+    unfreeze_last_n = 11
 
     if module == "training":
         TE_library = args.fasta
@@ -1552,6 +2148,8 @@ if __name__ == '__main__':
         output_directory = args.models_directory
         min_prob = args.min_prob
         task = str(args.task).lower()
+        base_models = args.base_models
+        gpus = args.gpus
 
         if task == "classification":
             # to load the ML based models
@@ -1597,6 +2195,9 @@ if __name__ == '__main__':
                 for m in custom_registry.keys():
                     print(f"    -> {m}")
 
+            if len(models) == 0 and len(custom_registry) == 0:
+                error("No models were selected/found. Finishing the execution...")
+
             if not os.path.exists(TE_library):
                 error(f"The input fasta file {TE_library} was not found.")
 
@@ -1614,22 +2215,22 @@ if __name__ == '__main__':
 
             info(f"Using the following classes ({num_classes}) ... ")
             print(f"    -> {list(superf_dict.keys())}")
-            training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir)
+            training(TE_library, work_dir, threads, models, num_classes, output_directory, superf_dict, custom_registry, PanTEon_dir, base_models, unfreeze_last_n, gpus)
             create_config_json(f"{output_directory}/training_variables.json", superf_dict, inv_superf_dict, num_classes,
                                min_prob)
 
         elif task == "identification":
             info(f"Executing PanTEon training module for task {task}... ")
 
-            models = []
+            """models = []
             if model_list is None:
                 models = []
                 info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
             elif model_list.lower() == "all":
-                models = ["PinaNet"]
+                models = [""]
             else:
                 for m in model_list.split(","):
-                    if m in ["PinaNet"]:
+                    if m in [""]:
                         models.append(m)
                     else:
                         info(
@@ -1648,12 +2249,17 @@ if __name__ == '__main__':
             if len(custom_registry) > 0:
                 info("Using the following customs ML/DL models: ")
                 for m in custom_registry.keys():
-                    print(f"    -> {m}")
+                    print(f"    -> {m}")"""
+
+            info(f"This task is still under development and will be included in future versions of PanTEon. "
+                 f"Please contact us if you need any help by opening an issue at: https://github.com/simonorozcoarias/PanTEon/issues")
 
         elif task == "trimming":
+            # to load the ML based models
+
             info(f"Executing PanTEon training module for task {task}... ")
 
-            models = []
+            """models = []
             if model_list is None:
                 models = []
                 info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
@@ -1680,7 +2286,10 @@ if __name__ == '__main__':
             if len(custom_registry) > 0:
                 info("Using the following customs ML/DL models: ")
                 for m in custom_registry.keys():
-                    print(f"    -> {m}")
+                    print(f"    -> {m}")"""
+
+            info(f"This task is still under development and will be included in future versions of PanTEon. "
+                 f"Please contact us if you need any help by opening an issue at: https://github.com/simonorozcoarias/PanTEon/issues")
 
         else:
             error(f"Task (parameter -k/--task) did not found: {task}")
@@ -1767,7 +2376,7 @@ if __name__ == '__main__':
         elif task == "identification":
             info(f"Executing PanTEon training module for task {task}... ")
 
-            models = []
+            """models = []
             if model_list is None:
                 models = []
                 info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
@@ -1794,12 +2403,15 @@ if __name__ == '__main__':
             if len(custom_registry) > 0:
                 info("Using the following customs ML/DL models: ")
                 for m in custom_registry.keys():
-                    print(f"    -> {m}")
+                    print(f"    -> {m}")"""
+
+            info(f"This task is still under development and will be included in future versions of PanTEon. "
+                 f"Please contact us if you need any help by opening an issue at: https://github.com/simonorozcoarias/PanTEon/issues")
 
         elif task == "trimming":
             info(f"Executing PanTEon training module for task {task}... ")
 
-            models = []
+            """models = []
             if model_list is None:
                 models = []
                 info("None in-built model selected (using -n/--models parameter). Trying to get custom models ... ")
@@ -1826,7 +2438,10 @@ if __name__ == '__main__':
             if len(custom_registry) > 0:
                 info("Using the following customs ML/DL models: ")
                 for m in custom_registry.keys():
-                    print(f"    -> {m}")
+                    print(f"    -> {m}")"""
+
+            info(f"This task is still under development and will be included in future versions of PanTEon. "
+                 f"Please contact us if you need any help by opening an issue at: https://github.com/simonorozcoarias/PanTEon/issues")
 
         else:
             error(f"Task (parameter -k/--task) did not found: {task}")
