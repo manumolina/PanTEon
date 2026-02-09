@@ -524,11 +524,71 @@ def data_handler(fasta,  max_len=0, mode="T"):
     return np.array([e for e in x]), max_len
 
 
+def warm_start_from_savedmodel(sess, based_dir, import_scope="BASE"):
+    """
+    Carga un SavedModel (guardado con tf.compat.v1.saved_model.simple_save)
+    en el grafo actual bajo import_scope y copia variables por nombre.
+    """
+    if not based_dir or not tf.io.gfile.exists(os.path.join(based_dir, "saved_model.pb")):
+        raise ValueError(f"SavedModel no válido en: {based_dir}")
+
+    print(f"Loading SavedModel for warm start from: {based_dir}")
+
+    # 1) Importar el SavedModel bajo un scope para no colisionar nombres
+    tf.compat.v1.saved_model.loader.load(
+        sess,
+        [tf.saved_model.SERVING],
+        based_dir,
+        import_scope=import_scope
+    )
+
+    # 2) Variables del modelo actual (destino)
+    dst_vars = {v.name.split(":")[0]: v for v in tf.compat.v1.global_variables()}
+
+    # 3) Variables importadas del modelo base (fuente)
+    src_vars = {}
+    for v in tf.compat.v1.global_variables():
+        name = v.name.split(":")[0]
+        if name.startswith(import_scope + "/"):
+            src_vars[name[len(import_scope) + 1:]] = v  # quitamos "BASE/" del nombre
+
+    # 4) Crear ops de asignación para copiar pesos que existan en ambos y tengan misma forma
+    assign_ops = []
+    matched, skipped = 0, 0
+
+    for name, dst in dst_vars.items():
+        # Ignora variables del propio scope importado
+        if name.startswith(import_scope + "/"):
+            continue
+
+        src = src_vars.get(name)
+        if src is None:
+            skipped += 1
+            continue
+
+        # Asegura misma forma
+        if dst.shape.as_list() != src.shape.as_list():
+            skipped += 1
+            continue
+
+        assign_ops.append(tf.compat.v1.assign(dst, src))
+        matched += 1
+
+    if matched == 0:
+        raise RuntimeError(
+            "No se pudo emparejar ninguna variable entre el modelo base y el actual. "
+            "Probablemente cambiaron nombres o arquitectura."
+        )
+
+    sess.run(assign_ops)
+    print(f"Warm start done. Copied {matched} variables. Skipped {skipped}.")
+
+
 def train_evaluate(x_train, y_train, x_test, y_test, vocab_size, max_len, classes, num_classes, 
                    architecture, activation_functions, widths, strides, dilations, feature_maps, 
                    optimizer, l2, train_batch_size, test_batch_size, epochs, dropout=0.5, 
                    output_file='Models/'+datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
-                   print_results = True, save_model = True):
+                   print_results = True, save_model = True, based_weights = ""):
     out = ''
     train_length = len(y_train)
     test_length = len(y_test)
@@ -568,6 +628,10 @@ def train_evaluate(x_train, y_train, x_test, y_test, vocab_size, max_len, classe
                 tf.compat.v1.global_variables_initializer(),
                 tf.compat.v1.local_variables_initializer()
             ])
+
+            # --- NUEVO: cargar pesos si based no es vacío ---
+            if based_weights:
+                warm_start_from_savedmodel(sess, based_weights, import_scope="BASE")
 
             def train_step(x_batch, y_batch):
                 feed_dict = {
@@ -651,292 +715,3 @@ def train_evaluate(x_train, y_train, x_test, y_test, vocab_size, max_len, classe
                 )
             
     return y_test, np.array(predictions[1], dtype=np.uint8), accuracies, best_result, training_time, out
-
-
-
-# ====================
-# MAIN
-# ====================
-if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        print(f"[ERROR] Parameter TE_library.fasta is required.")
-        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-        sys.exit(1)
-    else:
-        TE_library = sys.argv[1]
-        if len(sys.argv) > 2:
-            script_mode = sys.argv[2].upper()
-            if script_mode not in ['T', 'P']:
-                print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-                print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-                sys.exit(1)
-        else:
-            print("[INFO] Using training mode by default")
-            script_mode = "T"
-
-    if script_mode == "T":
-        start_all = time.time()
-
-        Y = get_label_data(TE_library)
-        num_classes = int(np.max(Y) + 1)
-        data_encoded, max_len = data_handler(TE_library)
-
-        ##########################
-        # 1. data split: 80% train, 10% dev and 10% test
-        print("### Step 1: Starting the dataset spliting ......")
-        start = time.time()
-        os.makedirs("trained_models/", exist_ok=True)
-        validation_size = 0.2
-        seed = 7
-
-        X_train, X_rem, Y_train, y_rem = train_test_split(data_encoded, Y, test_size=validation_size, random_state=seed, stratify=Y)
-        X_test, X_val, Y_test, Y_val = train_test_split(X_rem, y_rem, test_size=0.5, random_state=seed, stratify=y_rem)
-
-        print("\nDataset shapes:")
-        print(f"X_train shape: {X_train.shape}")
-        print(f"X_dev shape: {X_val.shape}")
-        print(f"X_test shape: {X_test.shape}")
-
-        print("\nLabel information:")
-        print(f"Shape of Y_train: {Y_train.shape}")
-        print(f"Shape of Y_dev: {Y_val.shape}")
-        print(f"Shape of Y_test: {Y_test.shape}")
-
-        print(f"\nNumber of unique classes in Y_train: {len(np.unique(Y_train))}")
-        print(f"Number of unique classes in Y_dev: {len(np.unique(Y_val))}")
-        print(f"Number of unique classes in Y_test: {len(np.unique(Y_test))}")
-
-        print("\nClasses distribution in Y_train:")
-        unique, counts = np.unique(Y_train, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        print("\nClasses distribution in Y_dev:")
-        unique, counts = np.unique(Y_val, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        print("\nClasses distribution in Y_test:")
-        unique, counts = np.unique(Y_test, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        end = time.time()
-        print(f"### Step 1 Done !! [{end - start}]......")
-
-
-        ###########################
-        # 4. Fit model on training data
-
-        report_out = ""
-        print_results = True
-        classes = np.unique(Y).tolist()
-        vocab_size = len(['A','C','G','T','N',5]) # 5 is the background signal for padding
-        shuffled = np.random.permutation(range(Y_train.shape[0]))
-        X_train = X_train[shuffled]
-        Y_train = Y_train[shuffled]
-
-        # Default parameters
-        architecture = ["conv", "pool", "conv", "pool", "conv", "pool", "fc", "fc"]
-        activation_functions = ["relu", "avg", "relu", "avg", "relu", "avg", "relu", "relu"]
-        widths = [20, 10, 20, 15, 35, 15, 1000, 500]
-        strides = [1, 10, 1, 15, 1, 15]
-        dilations = [1,1,1]
-        feature_maps = [64, 32, 32]
-        optimizer = 'ADAM'
-        learning_rate = 0.001
-        l2 = 0.001
-        train_batch_size = 32
-        test_batch_size = 32
-        epochs = 50
-        dropout = 0.5
-
-        labels, predictions, accuracies, best_result, training_time, training_out = train_evaluate(
-            X_train,
-            Y_train,
-            X_val,
-            Y_val,
-            vocab_size,
-            max_len,
-            classes,
-            num_classes,
-            architecture, activation_functions, widths,
-            strides, dilations, feature_maps,
-            get_optimizer(optimizer, learning_rate),
-            l2, train_batch_size, test_batch_size,
-            epochs, dropout,
-            output_file="trained_models/model_test"
-        )
-
-        if os.path.exists("trained_models/TERL_Classify_retrained_model"):
-            shutil.rmtree("trained_models/TERL_Classify_retrained_model")
-        shutil.move("trained_models/model_test_"+str(epochs), "trained_models/TERL_Classify_retrained_model")
-
-        print(predictions)
-        print("\n\n\n\n")
-        print(labels)
-
-        # report_out += training_out
-        # m = metrics.Metric(labels, best_result[1], classes=classes, filename_prefix="results")
-        # classification_report = m.get_report()
-        # if print_results: print(classification_report)
-        # report_out += classification_report
-
-        with tf.compat.v1.Session(graph=tf.Graph()) as sess:
-            tf.compat.v1.saved_model.loader.load(
-                sess,
-                ['serve'],
-                "trained_models/TERL_Classify_retrained_model"
-            )
-
-            num_classes = sess.run('num_classes:0')
-            # classes = [c.decode('utf-8') for c in sess.run('classes:0')]
-            classes = [int(c) for c in sess.run('classes:0')]
-            architecture = [layer.decode('utf-8') for layer in sess.run('architecture:0')]
-            functions = [func.decode('utf-8') for func in sess.run('activation_functions:0')]
-            widths = sess.run('widths:0')
-            strides = sess.run('strides:0')
-            feature_maps = sess.run('feature_maps:0')
-            vocab_size = sess.run('vocab_size:0')
-            max_len = sess.run('max_len:0')
-            print_model(architecture, functions, widths, strides, feature_maps, max_len)
-            test_size = len(X_test)
-
-            # ****** CLASSIFICATION *******
-            predictions = np.array([], dtype=np.uint8)
-            for batch in range(0, test_size, test_batch_size):
-                x_batch = X_test[batch : batch + test_batch_size]
-
-                pre_xo = sess.run('one_hot_x:0', feed_dict={'pre_x:0': x_batch})
-                x_batch = pre_xo.reshape(x_batch.shape[0], max_len, vocab_size, 1)
-
-                predictions = np.concatenate([
-                    predictions,
-                    sess.run(
-                        'prediction:0',
-                        feed_dict={
-                            'x_input:0': x_batch,
-                            'is_training:0': False
-                        }
-                    )
-                ])
-
-
-        ###########################
-        # 7. Testing report
-        metrics_(Y_test, predictions, num_classes)
-
-        # TESTS
-        valores, contagens = np.unique(Y_val, return_counts=True)
-        freq = {int(k): int(v) for k, v in zip(valores, contagens)}
-        print(freq)
-
-    elif script_mode == "P":
-
-        ##########################
-        # 0. Load and transform the data
-        start_all = time.time()
-        print("### Step 0: Starting to load and transform the dataset......")
-        start = time.time()
-
-        max_len = 19926
-        X, max_len = data_handler(TE_library, max_len=max_len,mode="P")
-        labels = [te.id for te in SeqIO.parse(TE_library, "fasta")]
-
-        end = time.time()
-        print(f"### Step 0 Done !! [{end - start}]......")
-
-        ##########################
-        # 1. Preprocess input data
-
-        ###########################
-        # 2. Load the already trained model
-        print("### Step 2: Starting to load the model and prediction......")
-        start = time.time()
-
-        with tf.compat.v1.Session(graph=tf.Graph()) as sess:
-            tf.compat.v1.saved_model.loader.load(
-                sess,
-                ['serve'],
-                "trained_models/TERL_Classify_retrained_model"
-            )
-
-            num_classes = sess.run('num_classes:0')
-            # classes = [c.decode('utf-8') for c in sess.run('classes:0')]
-            classes = [int(c) for c in sess.run('classes:0')]
-            architecture = [layer.decode('utf-8') for layer in sess.run('architecture:0')]
-            functions = [func.decode('utf-8') for func in sess.run('activation_functions:0')]
-            widths = sess.run('widths:0')
-            strides = sess.run('strides:0')
-            feature_maps = sess.run('feature_maps:0')
-            vocab_size = sess.run('vocab_size:0')
-            max_len = sess.run('max_len:0')
-            print_model(architecture, functions, widths, strides, feature_maps, max_len)
-            test_size = len(X)
-            test_batch_size = 32
-
-            # ****** CLASSIFICATION *******
-            y_preds_probs = np.empty((0, num_classes), dtype=np.float32)
-            for batch in range(0, test_size, test_batch_size):
-                x_batch = X[batch: batch + test_batch_size]
-
-                pre_xo = sess.run('one_hot_x:0', feed_dict={'pre_x:0': x_batch})
-                x_batch = pre_xo.reshape(x_batch.shape[0], max_len, vocab_size, 1)
-
-                y_preds_probs = np.concatenate([
-                    y_preds_probs,
-                    sess.run(
-                        'probabilities:0',
-                        feed_dict={
-                            'x_input:0': x_batch,
-                            'is_training:0': False
-                        }
-                    )
-                ])
-
-        end = time.time()
-        print(f"### Step 2 Done !! [{end - start}]......")
-
-        ###########################
-        # 4. Save results in fasta and in csv
-        print("### Step 4: Starting to save the results......")
-        start = time.time()
-
-        inv_superf_dict = {value: key for key, value in superf_dict.items()}
-        y_pred_idx = y_preds_probs.argmax(axis=1)
-        y_pred_label = [inv_superf_dict[i] for i in y_pred_idx]
-        prob_of_pred = y_preds_probs[np.arange(len(y_pred_idx)), y_pred_idx]
-        df = pd.DataFrame(
-            {
-                "id": labels,
-                "predicted_class": y_pred_label,
-                "probability": prob_of_pred,
-            }
-        )
-        df.to_csv("classification_prediction.csv", index=False)
-
-        min_prob = 0.0
-        final_seqs = []
-        for TE in SeqIO.parse(TE_library, "fasta"):
-            # remove previous classification if any
-            original_name = TE.id.split("#")[0]
-            position = labels.index(TE.id)
-            new_classification = y_pred_label[position] if prob_of_pred[position] >= min_prob else "Unknown"
-            TE.id = original_name + "#" + new_classification
-            if len(TE.description.split(" ")) > 1:
-                complement = " ".join(TE.description.split(" ")[1:])
-                TE.id += " " + complement
-            TE.description = ""
-            final_seqs.append(TE)
-        SeqIO.write(final_seqs, "classification_prediction.fasta", "fasta")
-
-        end = time.time()
-        print(f"### Step 4 Done !! [{end - start}]......")
-
-        end_all = time.time()
-        print(f"[INFO] Inference process successfully complete. Total time={end_all - start_all} seconds. ")
-
-    else:
-        print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-        sys.exit(1)

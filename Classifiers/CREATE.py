@@ -180,18 +180,46 @@ def create_attn_model(kmer, len_thre, class_num):
     return model, attention_model
 
 
-def run_experiment(X_oh_train, X_oh_test, X_kmer_train, X_kmer_test, y_train, y_test, class_num, k, l):
-    model, attention_model = create_attn_model(k, l, class_num)
-    model.compile(optimizer=Adam(learning_rate=0.0005), loss="categorical_crossentropy", metrics=[f1_m])
-
+def run_experiment(model, X_oh_train, X_oh_test, X_kmer_train, X_kmer_test, y_train, y_test, class_num, k, l, batch_size, epochs):
     lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_f1_m', mode="max", factor=0.01, patience=10, verbose=1)
     early_stopping = EarlyStopping(monitor='val_f1_m', mode="max", patience=50, restore_best_weights=True)
 
-    X_oh_train, X_kmer_train, y_train = shuffle(X_oh_train, X_kmer_train, y_train)
-    history = model.fit([X_kmer_train, X_oh_train], y_train, batch_size=32, epochs=10, verbose=1,
-              validation_data=([X_kmer_test, X_oh_test], y_test), callbacks=[lr_scheduler, early_stopping])
+    X_oh_train = X_oh_train.astype("float32")
+    X_kmer_train = X_kmer_train.astype("float32")
+    y_train = y_train.astype("float32")
+    X_oh_test = X_oh_test.astype("float32")
+    X_kmer_test = X_kmer_test.astype("float32")
+    y_test = y_test.astype("float32")
 
-    return model, history
+    X_oh_train, X_kmer_train, y_train = shuffle(X_oh_train, X_kmer_train, y_train)
+    X_oh_test, X_kmer_test, y_test = shuffle(X_oh_test, X_kmer_test, y_test)
+
+    train_steps = max(X_oh_train.shape[0] // batch_size, 1)
+    val_steps = max(X_oh_test.shape[0] // batch_size, 1)
+    train_ds = (tf.data.Dataset.from_tensor_slices(((X_kmer_train, X_oh_train), y_train))
+                .shuffle(min(len(X_oh_train), 10000), reshuffle_each_iteration=True)
+                .batch(batch_size, drop_remainder=True)
+                .repeat()
+                .prefetch(tf.data.AUTOTUNE))
+    val_ds = (tf.data.Dataset.from_tensor_slices(((X_kmer_test, X_oh_test), y_test))
+              .batch(batch_size, drop_remainder=True)
+              .repeat()
+              .prefetch(tf.data.AUTOTUNE))
+
+    history = model.fit(
+        train_ds,
+        epochs=epochs,
+        steps_per_epoch=train_steps,
+        validation_data=val_ds,
+        validation_steps=val_steps,
+        callbacks=[lr_scheduler, early_stopping],
+        verbose=1
+    )
+
+    del train_ds
+    del val_ds
+
+    return history
 
 
 def convert_undetermined_base(seq):
@@ -290,246 +318,3 @@ def get_label_data(data_file, mode="T"):
         else:
             return None
     return np.asarray(labels)
-
-
-# ====================
-# MAIN
-# ====================
-if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        print(f"[ERROR] Parameter TE_library.fasta is required.")
-        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-        sys.exit(1)
-    else:
-        TE_library = sys.argv[1]
-        if len(sys.argv) > 2:
-            script_mode = sys.argv[2].upper()
-            if script_mode not in ['T', 'P']:
-                print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-                print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-                sys.exit(1)
-        else:
-            print("[INFO] Using training script mode by default")
-            script_mode = "T"
-
-    k = 7
-    l = 600
-
-    if script_mode == "T":
-        start_all = time.time()
-        print("### Step 0: Starting to load and transform the dataset......")
-        start = time.time()
-        os.makedirs("trained_models/", exist_ok=True)
-
-        X_kmer = get_kmer_data(TE_library, k)
-        X_kmer = X_kmer.reshape(X_kmer.shape[0], 1, pow(4, k), 1)
-        X_kmer = X_kmer.astype("float64")
-
-        X_oh = get_oh_data(TE_library, l)
-        y = get_label_data(TE_library)
-
-        num_classes = int(np.max(y) + 1)
-
-        end = time.time()
-        print(f"### Step 0 Done !! [{end - start}]......")
-
-        ##########################
-        # 1. data split: 80% train, 10% dev and 10% test
-        print("### Step 1: Starting the dataset spliting ......")
-        start = time.time()
-
-        validation_size = 0.2
-        seed = 7
-        X_oh_train, X_oh_test_dev, X_kmer_train, X_kmer_test_dev, Y_train, y_test_dev = train_test_split(X_oh, X_kmer, y, stratify=y,
-                                                                            test_size=validation_size, random_state=seed)
-
-        X_oh_test, X_oh_dev, X_kmer_test, X_kmer_dev, Y_test, Y_dev = train_test_split(X_oh_test_dev, X_kmer_test_dev, y_test_dev,
-                                    stratify=y_test_dev, test_size=0.5, random_state=seed)
-
-        print("\nDataset shapes:")
-        print(f"X_oh_train shape: {X_oh_train.shape}")
-        print(f"X_oh_dev shape: {X_oh_dev.shape}")
-        print(f"X_oh_test shape: {X_oh_test.shape}")
-        print(f"X_kmer_train shape: {X_kmer_train.shape}")
-        print(f"X_kmer_dev shape: {X_kmer_dev.shape}")
-        print(f"X_kmer_test shape: {X_kmer_test.shape}")
-
-        print("\nLabel information:")
-        print(f"Shape of Y_train: {Y_train.shape}")
-        print(f"Shape of Y_train: {Y_dev.shape}")
-        print(f"Shape of Y_test: {Y_test.shape}")
-
-        print(f"\nNumber of unique classes in Y_train: {len(np.unique(Y_train))}")
-        print(f"Number of unique classes in Y_test: {len(np.unique(Y_test))}")
-
-        print("\nClasses distribution in Y_train:")
-        unique, counts = np.unique(Y_train, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        print("\nClasses distribution in Y_dev:")
-        unique, counts = np.unique(Y_dev, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        print("\nClasses distribution in Y_test:")
-        unique, counts = np.unique(Y_test, return_counts=True)
-        for cls, count in zip(unique, counts):
-            print(f"Class {cls}: {count} samples")
-
-        end = time.time()
-        print(f"### Step 1 Done !! [{end - start}]......")
-
-        ##########################
-        # 2. Preprocess input data
-
-
-        ###########################
-        # 3. Preprocess class labels; i.e. convert 1-dimensional class arrays to 3-dimensional class matrices
-        print("### Step 3: Starting the labels preprocessing steps ......")
-        start = time.time()
-
-        Y_train_one_hot = to_categorical(Y_train, int(num_classes))  # four labels
-        Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))  # four labels
-        Y_test_one_hot = to_categorical(Y_test, int(num_classes))  # four labels
-
-        end = time.time()
-        print(f"### Step 3 Done !! [{end - start}]......")
-
-        ###########################
-        # 4. Fit model on training data
-        print("### Step 4: Starting the fitting ......")
-        start = time.time()
-
-        model, history = run_experiment(X_oh_train, X_oh_dev, X_kmer_train, X_kmer_dev, Y_train_one_hot, Y_dev_one_hot, num_classes, k, l)
-        tf.keras.utils.plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
-
-        end = time.time()
-        print(f"### Step 4 Done !! [{end - start}]......")
-
-        ###########################
-        # 5.  save the model
-        print("### Step 5: Saving the trained model ......")
-        start = time.time()
-
-        model.save('trained_models/CREATE_retrained_model.h5')
-
-        end = time.time()
-        print(f"### Step 5 Done !! [{end - start}]......")
-
-        ###########################
-        # 6. Training report
-        print("### Step 6: Creating the training reports ......")
-        start = time.time()
-
-        plot_training_metrics(history)
-
-        end = time.time()
-        print(f"### Step 6 Done !! [{end - start}]......")
-
-        ###########################
-        # 7. Testing report
-        print("### Step 7: Creating the testing reports ......")
-        start = time.time()
-
-        predicted_classes = model.predict([X_kmer_test, X_oh_test])
-        predicted_classes = np.argmax(predicted_classes, axis=1)
-        metrics(Y_test, predicted_classes, num_classes)
-
-        end = time.time()
-        print(f"### Step 7 Done !! [{end - start}]......")
-
-        end_all = time.time()
-        print(f"[INFO] Training process successfully complete. Total time={end_all - start_all} seconds. ")
-
-    elif script_mode == "P":
-
-        ##########################
-        # 0. Load and transform the data
-        start_all = time.time()
-        print("### Step 0: Starting to load and transform the dataset......")
-        start = time.time()
-
-        X_kmer = get_kmer_data(TE_library, k)
-        X_kmer = X_kmer.reshape(X_kmer.shape[0], 1, pow(4, k), 1)
-        X_kmer = X_kmer.astype("float64")
-
-        X_oh = get_oh_data(TE_library, l)
-
-        labels = get_label_data(TE_library, mode=script_mode).tolist()
-
-        end = time.time()
-        print(f"### Step 0 Done !! [{end - start}]......")
-
-        ##########################
-        # 1. Preprocess input data
-
-
-        ###########################
-        # 2. Load the already trained model
-        print("### Step 2: Starting to load the model......")
-        start = time.time()
-
-        k = 7
-        l = 600
-        class_num = 30
-
-        model, attention_model = create_attn_model(k, l, class_num)
-        model.load_weights("trained_models/CREATE_retrained_model.h5")
-
-        end = time.time()
-        print(f"### Step 2 Done !! [{end - start}]......")
-
-        ###########################
-        # 3. Predict the labels
-        print("### Step 3: Starting to predict the TE classification......")
-        start = time.time()
-
-        y_preds_probs = model.predict([X_kmer, X_oh])
-
-        end = time.time()
-        print(f"### Step 3 Done !! [{end - start}]......")
-
-        ###########################
-        # 4. Save results in fasta and in csv
-        print("### Step 4: Starting to save the results......")
-        start = time.time()
-
-        inv_superf_dict = {value: key for key, value in superf_dict.items()}
-        y_pred_idx = y_preds_probs.argmax(axis=1)
-        y_pred_label = [inv_superf_dict[i] for i in y_pred_idx]
-        prob_of_pred = y_preds_probs[np.arange(len(y_pred_idx)), y_pred_idx]
-        df = pd.DataFrame(
-            {
-                "id": labels,
-                "predicted_class": y_pred_label,
-                "probability": prob_of_pred,
-            }
-        )
-        df.to_csv("classification_prediction.csv", index=False)
-
-        min_prob = 0.0
-        final_seqs = []
-        for TE in SeqIO.parse(TE_library, "fasta"):
-            # remove previous classification if any
-            original_name = TE.id.split("#")[0]
-            position = labels.index(TE.id)
-            new_classification = y_pred_label[position] if prob_of_pred[position] >= min_prob else "Unknown"
-            TE.id = original_name + "#" + new_classification
-            if len(TE.description.split(" ")) > 1:
-                complement = " ".join(TE.description.split(" ")[1:])
-                TE.id += " " + complement
-            TE.description = ""
-            final_seqs.append(TE)
-        SeqIO.write(final_seqs, "classification_prediction.fasta", "fasta")
-
-        end = time.time()
-        print(f"### Step 4 Done !! [{end - start}]......")
-
-        end_all = time.time()
-        print(f"[INFO] Inference process successfully complete. Total time={end_all - start_all} seconds. ")
-
-    else:
-        print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-        print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-        sys.exit(1)

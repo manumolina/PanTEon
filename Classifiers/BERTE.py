@@ -248,8 +248,37 @@ def get_model(input_4mer_shape, input_5mer_shape, input_6mer_shape, num_class):
 def run_experiment(model, X_train, Y_train, X_dev, Y_dev, batch_size, num_epochs):
 	lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_f1_m', mode="max", factor=0.01, patience=10, verbose=1)
 	early_stopping = EarlyStopping(monitor='val_f1_m', mode="max", patience=50, restore_best_weights=True)
-	history = model.fit(X_train, Y_train, batch_size=batch_size, epochs=num_epochs,
-						validation_data=(X_dev, Y_dev), callbacks=[lr_scheduler, early_stopping], verbose=1)
+
+	X_train = [X.astype("float32") for X in X_train]
+	Y_train = tf.cast(Y_train, tf.float32)
+	X_dev = [X.astype("float32") for X in X_dev]
+	Y_dev = tf.cast(Y_dev, tf.float32)
+
+	train_steps = max(X_train[0].shape[0] // batch_size, 1)
+	val_steps = max(X_dev[0].shape[0] // batch_size, 1)
+	train_ds = (tf.data.Dataset.from_tensor_slices(((X_train[0], X_train[1], X_train[2]), Y_train))
+				.shuffle(min(len(X_train[0]), 10000), reshuffle_each_iteration=True)
+				.batch(batch_size, drop_remainder=True)
+				.repeat()
+				.prefetch(tf.data.AUTOTUNE))
+
+	val_ds = (tf.data.Dataset.from_tensor_slices(((X_dev[0], X_dev[1], X_dev[2]), Y_dev))
+			  .batch(batch_size, drop_remainder=True)
+			  .repeat()
+			  .prefetch(tf.data.AUTOTUNE))
+
+	history = model.fit(
+		train_ds,
+		epochs=num_epochs,
+		steps_per_epoch=train_steps,
+		validation_data=val_ds,
+		validation_steps=val_steps,
+		callbacks=[lr_scheduler, early_stopping],
+		verbose=1
+	)
+
+	del train_ds
+	del val_ds
 	return history
 
 
@@ -306,312 +335,3 @@ def truncate_seq_indv(seq: str, L: int) -> str:
 	left = math.ceil(L / 2)   # un carácter más a la izquierda
 	right = L // 2
 	return seq[:left] + seq[-right:]
-
-# ====================
-# MAIN
-# ====================
-if __name__ == '__main__':
-
-	if len(sys.argv) == 1:
-		print(f"[ERROR] Parameter TE_library.fasta is required.")
-		print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-		sys.exit(1)
-	else:
-		TE_library = sys.argv[1]
-		if len(sys.argv) > 2:
-			script_mode = sys.argv[2].upper()
-			if script_mode not in ['T', 'P']:
-				print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-				print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-				sys.exit(1)
-		else:
-			print("[INFO] Using training script mode by default")
-			script_mode = "T"
-
-	if script_mode == "T":
-		start_all = time.time()
-		print("### Step 0: Starting to load and transform the dataset......")
-		start = time.time()
-		os.makedirs("trained_models/", exist_ok=True)
-		stride = 1
-		max_tokens = 503
-		batch_size = 512
-		epochs = 100
-		input_4mer_shape = (1, 4 ** 4 + 256, 1)
-		input_5mer_shape = (1, 4 ** 5 + 256, 1)
-		input_6mer_shape = (1, 4 ** 6 + 256, 1)
-
-		print("### Step 0: Starting to load and transform the dataset......")
-		start = time.time()
-
-		X4, X5, X6, Y = load_data(TE_library)
-
-		##########################
-		# 0. Save the data
-		os.makedirs("data_for_training/", exist_ok=True)
-		np.save("data_for_training/X4.npy", X4)
-		np.save("data_for_training/X5.npy", X5)
-		np.save("data_for_training/X6.npy", X6)
-		np.save("data_for_training/Y.npy", Y)
-
-		"""X4 = np.load("data_for_training/X4.npy")
-		X5 = np.load("data_for_training/X5.npy")
-		X6 = np.load("data_for_training/X6.npy")
-		Y = np.load("data_for_training/Y.npy")"""
-
-		num_classes = int(np.max(Y) + 1)
-
-		end = time.time()
-		print(f"### Step 0 Done !! [{end - start}]......")
-
-		##########################
-		# 1. data split: 80% train, 10% dev and 10% test
-		print("### Step 1: Starting the dataset spliting ......")
-		start = time.time()
-		validation_size = 0.2
-		seed = 7
-		# División del conjunto de datos
-		X_train_4mer, X_rem_4mer, Y_train, y_rem = train_test_split(X4, Y, test_size=validation_size, random_state=seed, stratify=Y)
-		X_test_4mer, X_val_4mer, Y_test, Y_dev = train_test_split(X_rem_4mer, y_rem, test_size=0.5, random_state=seed,
-																  stratify=y_rem)
-
-		X_train_5mer, X_rem_5mer, Y_train, y_rem = train_test_split(X5, Y, test_size=validation_size, random_state=seed, stratify=Y)
-		X_test_5mer, X_val_5mer, Y_test, Y_dev = train_test_split(X_rem_5mer, y_rem, test_size=0.5, random_state=seed,
-																  stratify=y_rem)
-
-		X_train_6mer, X_rem_6mer, Y_train, y_rem = train_test_split(X6, Y, test_size=validation_size, random_state=seed, stratify=Y)
-		X_test_6mer, X_val_6mer, Y_test, Y_dev = train_test_split(X_rem_6mer, y_rem, test_size=0.5, random_state=seed,
-																  stratify=y_rem)
-
-
-		print("\nDataset k=4 shapes:")
-		print(f"X_train shape: {X_train_4mer.shape}")
-		print(f"X_dev shape: {X_val_4mer.shape}")
-		print(f"X_test shape: {X_test_4mer.shape}")
-
-		print("\nDataset k=5 shapes:")
-		print(f"X_train shape: {X_train_5mer.shape}")
-		print(f"X_dev shape: {X_val_5mer.shape}")
-		print(f"X_test shape: {X_test_5mer.shape}")
-
-		print("\nDataset k=6 shapes:")
-		print(f"X_train shape: {X_train_6mer.shape}")
-		print(f"X_dev shape: {X_val_6mer.shape}")
-		print(f"X_test shape: {X_test_6mer.shape}")
-
-		print("\nLabel information:")
-		print(f"Shape of Y_train: {Y_train.shape}")
-		print(f"Shape of Y_dev: {Y_dev.shape}")
-		print(f"Shape of Y_test: {Y_test.shape}")
-
-		print(f"\nNumber of unique classes in Y_train: {len(np.unique(Y_train))}")
-		print(f"Number of unique classes in Y_dev: {len(np.unique(Y_dev))}")
-		print(f"Number of unique classes in Y_test: {len(np.unique(Y_test))}")
-
-		print("\nClasses distribution in Y_train:")
-		unique, counts = np.unique(Y_train, return_counts=True)
-		for cls, count in zip(unique, counts):
-			print(f"Class {cls}: {count} samples")
-
-		print("\nClasses distribution in Y_dev:")
-		unique, counts = np.unique(Y_dev, return_counts=True)
-		for cls, count in zip(unique, counts):
-			print(f"Class {cls}: {count} samples")
-
-		print("\nClasses distribution in Y_test:")
-		unique, counts = np.unique(Y_test, return_counts=True)
-		for cls, count in zip(unique, counts):
-			print(f"Class {cls}: {count} samples")
-
-		# Optimizing memory usage
-		X4 = None
-		X5 = None
-		X6 = None
-		Y = None
-
-		end = time.time()
-		print(f"### Step 1 Done !! [{end - start}]......")
-
-		##########################
-		# 2. Preprocess input data
-		print("### Step 2: Starting the features preprocessing steps ......")
-		start = time.time()
-
-		X_train_4mer = X_train_4mer.reshape(X_train_4mer.shape[0], 1, 4 ** 4 + 256, 1)
-		X_train_5mer = X_train_5mer.reshape(X_train_5mer.shape[0], 1, 4 ** 5 + 256, 1)
-		X_train_6mer = X_train_6mer.reshape(X_train_6mer.shape[0], 1, 4 ** 6 + 256, 1)
-
-		X_val_4mer = X_val_4mer.reshape(X_val_4mer.shape[0], 1, 4 ** 4 + 256, 1)
-		X_val_5mer = X_val_5mer.reshape(X_val_5mer.shape[0], 1, 4 ** 5 + 256, 1)
-		X_val_6mer = X_val_6mer.reshape(X_val_6mer.shape[0], 1, 4 ** 6 + 256, 1)
-
-		X_test_4mer = X_test_4mer.reshape(X_test_4mer.shape[0], 1, 4 ** 4 + 256, 1)
-		X_test_5mer = X_test_5mer.reshape(X_test_5mer.shape[0], 1, 4 ** 5 + 256, 1)
-		X_test_6mer = X_test_6mer.reshape(X_test_6mer.shape[0], 1, 4 ** 6 + 256, 1)
-
-		X_train = [X_train_4mer, X_train_5mer, X_train_6mer]
-		X_dev = [X_val_4mer, X_val_5mer, X_val_6mer]
-		X_test = [X_test_4mer, X_test_5mer, X_test_6mer]
-
-		end = time.time()
-		print(f"### Step 2 Done !! [{end - start}]......")
-
-		###########################
-		# 3. Preprocess class labels; i.e. convert 1-dimensional class arrays to 3-dimensional class matrices
-		print("### Step 3: Starting the labels preprocessing steps ......")
-		start = time.time()
-
-		y_train_onehot = tf.one_hot(Y_train, depth=num_classes)
-		y_val_onehot = tf.one_hot(Y_dev, depth=num_classes)
-		y_test_onehot = tf.one_hot(Y_test, depth=num_classes)
-
-		end = time.time()
-		print(f"### Step 3 Done !! [{end - start}]......")
-
-		###########################
-		# 4. Fit model on training data
-		print("### Step 4: Starting the fitting ......")
-		start = time.time()
-
-		batch_size = 64
-		num_epochs = 50
-		model = get(input_4mer_shape, input_5mer_shape, input_6mer_shape, num_classes)
-		print(model.summary())
-		tf.keras.utils.plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
-
-		history = run_experiment(model, X_train, y_train_onehot, X_dev, y_val_onehot, batch_size=batch_size, num_epochs=num_epochs)
-
-		end = time.time()
-		print(f"### Step 4 Done !! [{end - start}]......")
-
-		###########################
-		# 5.  save the model
-		print("### Step 5: Saving the trained model ......")
-		start = time.time()
-
-		model.save('trained_models/BERTE_retrained_model.h5')
-
-		end = time.time()
-		print(f"### Step 5 Done !! [{end - start}]......")
-		###########################
-		# 6. Training report
-		print("### Step 6: Creating the training reports ......")
-		start = time.time()
-
-		plot_training_metrics(history)
-
-		end = time.time()
-		print(f"### Step 6 Done !! [{end - start}]......")
-
-		###########################
-		# 7. Testing report
-		print("### Step 7: Creating the testing reports ......")
-		start = time.time()
-
-		predicted_classes = model.predict(X_test)
-		predicted_classes = np.argmax(predicted_classes, axis=1)
-		metrics(Y_test, predicted_classes, num_classes)
-
-		end = time.time()
-		print(f"### Step 7 Done !! [{end - start}]......")
-
-		end_all = time.time()
-		print(f"[INFO] Training process successfully complete. Total time={end_all - start_all} seconds. ")
-
-	elif script_mode == "P":
-
-		##########################
-		# 0. Load and transform the data
-		start_all = time.time()
-		print("### Step 0: Starting to load and transform the dataset......")
-		start = time.time()
-		X4, X5, X6, labels = load_data(TE_library, mode=script_mode)
-		labels = labels.tolist()
-		end = time.time()
-		print(f"### Step 0 Done !! [{end - start}]......")
-
-		##########################
-		# 1. Preprocess input data
-		print("### Step 1: Starting the preprocessing step......")
-		start = time.time()
-		X4 = X4.reshape(X4.shape[0], 1, 4 ** 4 + 256, 1)
-		X5 = X5.reshape(X5.shape[0], 1, 4 ** 5 + 256, 1)
-		X6 = X6.reshape(X6.shape[0], 1, 4 ** 6 + 256, 1)
-
-		X_dataset = [X4, X5, X6]
-
-		end = time.time()
-		print(f"### Step 1 Done !! [{end - start}]......")
-
-		###########################
-		# 2. Load the already trained model
-		print("### Step 2: Starting to load the model......")
-		start = time.time()
-
-		model = load_model("trained_models/BERTE_retrained_model.h5")
-
-		end = time.time()
-		print(f"### Step 2 Done !! [{end - start}]......")
-
-		###########################
-		# 3. Predict the labels
-		print("### Step 3: Starting to predict the TE classification......")
-		start = time.time()
-
-		y_preds_probs = model.predict(X_dataset)
-
-		end = time.time()
-		print(f"### Step 3 Done !! [{end - start}]......")
-
-		###########################
-		# 4. Save results in fasta and in csv
-		print("### Step 4: Starting to save the results......")
-		start = time.time()
-
-		inv_superf_dict = {
-			0: 'CLASSI/LTR/LTR', 1: 'CLASSI/LTR/COPIA', 2: 'CLASSI/LTR/GYPSY', 3: 'CLASSI/LTR/ERV',
-			4: 'CLASSI/LTR/BELPAO',
-			5: 'CLASSI/LINE/LINE', 6: 'CLASSI/LINE/I', 7: 'CLASSI/LINE/L1', 8: 'CLASSI/LINE/RTE', 9: 'CLASSI/DIRS/DIRS',
-			10: 'CLASSI/PLE/PLE', 11: 'CLASSI/SINE/SINE', 12: 'CLASSI/SINE/TRNA', 13: 'CLASSII/HELITRON/HELITRON',
-			14: 'CLASSII/CRYPTON/CRYPTON', 15: 'CLASSII/TIR/HAT', 16: 'CLASSII/TIR/MERLIN', 17: 'CLASSII/TIR/P',
-			18: 'CLASSII/TIR/TIR', 19: 'CLASSII/TIR/TC1MARINER', 20: 'CLASSII/TIR/MULE', 21: 'CLASSII/TIR/PIFHARBINGER',
-			22: 'CLASSII/TIR/CACTA', 23: 'CLASSII/TIR/PIGGYBAC', 24: 'CLASSI/LINE/CR1', 25: 'CLASSI/LINE/R1',
-			26: 'CLASSI/LTR/LARD', 27: 'CLASSI/SINE/ALU', 28: 'CLASSII/TIR/KOLOBOK', 29: 'CLASSII/TIR/ACADEM-1'
-		}
-		y_pred_idx = y_preds_probs.argmax(axis=1)
-		y_pred_label = [inv_superf_dict[i] for i in y_pred_idx]
-		prob_of_pred = y_preds_probs[np.arange(len(y_pred_idx)), y_pred_idx]
-		df = pd.DataFrame(
-			{
-				"id": labels,
-				"predicted_class": y_pred_label,
-				"probability": prob_of_pred,
-			}
-		)
-		df.to_csv("classification_prediction.csv", index=False)
-
-		min_prob = 0.0
-		final_seqs = []
-		for TE in SeqIO.parse(TE_library, "fasta"):
-			# remove previous classification if any
-			original_name = TE.id.split("#")[0]
-			position = labels.index(TE.id)
-			new_classification = y_pred_label[position] if prob_of_pred[position] >= min_prob else "Unknown"
-			TE.id = original_name + "#" + new_classification
-			if len(TE.description.split(" ")) > 1:
-				complement = " ".join(TE.description.split(" ")[1:])
-				TE.id += " " + complement
-			TE.description = ""
-			final_seqs.append(TE)
-		SeqIO.write(final_seqs, "classification_prediction.fasta", "fasta")
-
-		end = time.time()
-		print(f"### Step 4 Done !! [{end - start}]......")
-
-		end_all = time.time()
-		print(f"[INFO] Inference process successfully complete. Total time={end_all - start_all} seconds. ")
-
-	else:
-		print(f"[ERROR] script_mode should be T or P, found {script_mode} instead.")
-		print(f"[USAGE] python3 {sys.argv[0]} TE_library.fasta [script_mode]")
-		sys.exit(1)
