@@ -293,7 +293,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = np.array(to_categorical(Y_train, num_classes))
                 Y_dev_one_hot = np.array(to_categorical(Y_dev, num_classes))
 
-                batch_size = 100 # 512
+                batch_size = 512
                 num_epochs = 100
 
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
@@ -531,7 +531,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = to_categorical(Y_train, int(num_classes))
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
 
-                batch_size = 100 # 512
+                batch_size = 512
                 num_epochs = 100
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
@@ -742,7 +742,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
                 Y_test_one_hot = to_categorical(Y_test, int(num_classes))
 
-                batch_size = 100 # 512
+                batch_size = 512
                 num_epochs = 200
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0], Y_test_one_hot.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
