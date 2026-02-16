@@ -1854,7 +1854,7 @@ def check_taxon_in_db(metadata_df, taxon, tax_cols):
     if taxon_norm in universe:
         return taxon_norm
 
-    # Si no está, busca matches cercanos
+    # If not found, check similar words
     close = difflib.get_close_matches(taxon_norm, sorted(universe), n=10, cutoff=0.6)
 
     # También sugiere coincidencias por substring (útil para términos largos)
@@ -1995,7 +1995,7 @@ def library(base_path, taxon, req_class, view_only):
             continue
 
         class_part, species = parts
-        species = species.strip().lower()
+        species = species.strip().lower().replace("@", "")
 
         class_tokens = [x.strip().lower() for x in class_part.split("/") if x.strip()]
 
@@ -2009,25 +2009,25 @@ def library(base_path, taxon, req_class, view_only):
             superfamily = class_tokens[-1].upper()
             superfamily_counter[superfamily] += 1
 
-    if view_only:
-        info("\n" + "=" * 60)
-        info(" PanTEon TE Library Report")
-        info("=" * 60)
-        info(f"Taxon filter      : {taxon}")
-        info(f"TE class filter   : {req_class}")
-        info(f"Total sequences   : {len(kept)}")
+    info("\n" + "=" * 60)
+    info(" PanTEon TE Library Report")
+    info("=" * 60)
+    info(f"Taxon filter      : {taxon}")
+    info(f"TE class filter   : {req_class}")
+    info(f"Total sequences   : {len(kept)}")
+    info("-" * 60)
+
+    if superfamily_counter:
+        info(f"{'Superfamily':25s} | {'Count':>10s}")
         info("-" * 60)
-
-        if superfamily_counter:
-            info(f"{'Superfamily':25s} | {'Count':>10s}")
-            info("-" * 60)
-            for sf, count in superfamily_counter.most_common():
-                info(f"{sf:25s} | {count:10d}")
-        else:
-            info("No sequences selected.")
-
-        info("=" * 60 + "\n")
+        for sf, count in superfamily_counter.most_common():
+            info(f"{sf:25s} | {count:10d}")
     else:
+        info("No sequences selected.")
+
+    info("=" * 60 + "\n")
+
+    if not view_only:
         SeqIO.write(kept, f"PanTEonDB_{taxon}_{req_class}.fasta", "fasta")
     return metadata_df
 
