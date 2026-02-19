@@ -1,43 +1,15 @@
 #!/usr/bin/env python3
 
-"""
-Read a “wide” Excel file with columns:
-ID, Superfamily, Support, BERTE, ClassifyTE, CREATE, DeepTE, Inpactor2_Classify, NeuralTE, TEClass2, TERL, Terrier
-(where each tool column contains the F1-score for that superfamily, and Support is unique per row/superfamily).
-
-Generate:
-
-1. A long-format CSV with columns: Tool, Superfamily (cleaned and normalized), F1, Support
-2. Panel A: F1 heatmap + Panel B support bar (Support)
-3. Panel C: critical difference diagram (Demšar) using the Nemenyi test
-
-Uso:
-  python compute_f1_retraining.py input.xlsx \
-      -o f1_superfamily_by_tool.csv \
-      --outdir figuras \
-      --alpha 0.05 \
-      --sheet 0 \
-      --formats pdf png
-"""
-
 import argparse
 import os
 import re
 import math
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# SciPy to calculate Critical Difference (Nemenyi)
-try:
-    from scipy.stats import studentized_range
-    SCIPY_AVAILABLE = True
-except Exception:
-    SCIPY_AVAILABLE = False
-
-# ===== FIX ORDEN OF SUPERFAMILIES (to use NORMALIZED labels) =====
+# FIX ORDEN OF SUPERFAMILIES (to use NORMALIZED labels)
 SUPERFAMILY_ORDER = [
     "LTR",
     "BELPAO",
@@ -72,7 +44,7 @@ SUPERFAMILY_ORDER = [
     "MAVERICK",
 ]
 
-# ===== Pretty names Map =====
+# Proper "pretty" names
 PRETTY_MAP = {
     "TC1MARINER": "Tc1-Mariner",
     "HAT": "hAT",
@@ -89,17 +61,11 @@ PRETTY_MAP = {
 }
 
 def normalize_label(label: str) -> str:
-    """
-    Normalize the superfamily label for comparison/ordering:
-        * If it appears as LTR/Copia, LINE/L1, etc., take the last component after /.
-        * Uppercase, no spaces, no punctuation.
-        * Apply known mappings (L1, TC1-MARINER, PIF-HARBINGER, DIRS, ERV, …).
-    """
     if label is None:
         return ""
     s = str(label).strip()
     if "/" in s:
-        s = s.split("/")[-1]  # componente más específico (derecha)
+        s = s.split("/")[-1]
     s = s.upper()
     s = s.replace(" ", "")
     s = re.sub(r"[^A-Z0-9]+", "", s)
@@ -121,30 +87,22 @@ def pretty_label(norm: str) -> str:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Genera heatmap de F1 + barra de soporte y CD desde un Excel ancho."
+        description="Generate an F1 heatmap + support bar plot and Critical Difference (CD) diagram from a wide-format Excel file."
     )
-    p.add_argument("input", help="Excel de entrada (.xlsx/.xls).")
+    p.add_argument("input", help="Input Excel file (.xlsx/.xls).")
     p.add_argument("-o", "--output", default="f1_superfamily_by_tool.csv",
-                   help="CSV de salida (largo) con Tool, Superfamily, F1, Support.")
-    p.add_argument("--outdir", default="figuras", help="Directorio de salida para las figuras.")
-    p.add_argument("--alpha", type=float, default=0.05, help="Nivel de significación para CD (Nemenyi).")
+                   help="Output CSV file (long format) with Tool, Superfamily, F1, and Support.")
+    p.add_argument("--outdir", default="figures", help="Output directory for the figures.")
+    p.add_argument("--alpha", type=float, default=0.05, help="Significance level for CD (Nemenyi test).")
     p.add_argument("--formats", nargs="+", default=["pdf"], choices=["pdf", "png", "svg"],
-                   help="Formatos de las figuras.")
-    p.add_argument("--sheet", default=0, help="Hoja del Excel (nombre o índice).")
-    p.add_argument("--title", default="Benchmark de superfamilias (F1 por herramienta)",
-                   help="Título para el panel A.")
+                   help="Figure output formats.")
+    p.add_argument("--sheet", default=0, help="Excel sheet (name or index).")
     return p.parse_args()
 
+
 def read_f1_wide_excel_with_support(path, sheet=0):
-    """
-    Read a “wide” Excel file with columns:
-        * Superfamily (possibly hierarchical), Support (unique per superfamily), and an optional ID
-        * All remaining columns (except ID and Support) are tool names with F1 scores (float).
-    Return: df_long (Tool, Superfamily_norm, Superfamily, F1, Support) and an A–Z list of tools.
-    """
     df = pd.read_excel(path, sheet_name=sheet, header=0)
 
-    # Normalize key names (case-insensitive)
     colmap = {c: str(c) for c in df.columns}
     low = {str(c).lower(): c for c in df.columns}
 
@@ -156,7 +114,6 @@ def read_f1_wide_excel_with_support(path, sheet=0):
     if support_col is None:
         raise ValueError("No se encontró la columna 'Support' en el Excel.")
 
-    # Tools = all columns except ID, Superfamily, and Support
     tool_cols = [c for c in df.columns if c not in (sf_col, support_col) and str(c).upper() != "ID"]
     if not tool_cols:
         raise ValueError("No se detectaron columnas de herramientas con F1.")
@@ -167,7 +124,6 @@ def read_f1_wide_excel_with_support(path, sheet=0):
         sf_norm = normalize_label(sf_raw)
         sf_pretty = pretty_label(sf_norm)
 
-        # Support per superfamily (replicated for each tool in the long-format DataFrame)
         sup_val = r[support_col]
         try:
             sup_val = int(sup_val)
@@ -193,7 +149,6 @@ def read_f1_wide_excel_with_support(path, sheet=0):
 
     df_long = pd.DataFrame(rows)
 
-    # Stable A–Z ordering of tools
     tools_sorted = sorted(df_long["Tool"].unique(), key=lambda x: x.upper())
     df_long["Tool"] = pd.Categorical(df_long["Tool"], categories=tools_sorted, ordered=True)
     df_long = df_long.sort_values(["Tool", "Superfamily"])
@@ -205,23 +160,14 @@ def rank_of_superfamily(sf_norm: str) -> float:
         return SUPERFAMILY_ORDER.index(sf_norm)
     return len(SUPERFAMILY_ORDER) + sorted([sf_norm]).index(sf_norm)
 
-# ===== Panel A: Heatmap + Panel B: support bar =====
-def plot_heatmap_with_support(df_f1, outdir, title="Benchmark (F1 por herramienta)",
-                              formats=("pdf",), cmap="viridis"):
-    """
-    df_f1: Long-format DataFrame with columns Tool, Superfamily_norm, F1, Support
-    """
-    # F1 matrix (rows: superfamilies_norm; columns: tools)
+def plot_heatmap_with_support(df_f1, outdir, formats=("pdf",), cmap="viridis"):
     mat = df_f1.pivot(index="Superfamily_norm", columns="Tool", values="F1")
 
-    # ‘Support’ series per superfamily: take the value (should be unique)
     support = df_f1.groupby("Superfamily_norm")["Support"].max().reindex(mat.index)
 
-    # Columns (tools) A–Z
     col_order = sorted(mat.columns.tolist(), key=lambda x: str(x).upper())
     mat = mat[col_order]
 
-    # Rows (superfamilies) in fixed order + unknowns at the end (A–Z)
     known = [sf for sf in SUPERFAMILY_ORDER if sf in mat.index]
     unknown = sorted([sf for sf in mat.index if sf not in SUPERFAMILY_ORDER], key=lambda x: x.upper())
     row_order = known + unknown
@@ -230,18 +176,15 @@ def plot_heatmap_with_support(df_f1, outdir, title="Benchmark (F1 por herramient
 
     ylabels_pretty = [pretty_label(sf) for sf in row_order]
 
-    # Figure with GridSpec: heatmap (wide) + support bar (narrow)
     fig = plt.figure(figsize=(10.2, max(4.8, 0.3 * len(row_order))))
     gs = fig.add_gridspec(nrows=1, ncols=10, wspace=0.15, left=0.08, right=0.95, top=0.9, bottom=0.08)
     ax_hm = fig.add_subplot(gs[0, :8])
     ax_sup = fig.add_subplot(gs[0, 8:])
 
-    # Heatmap
     sns.heatmap(mat, ax=ax_hm, cmap=cmap, vmin=0.0, vmax=1.0, cbar=True,
                 cbar_kws={"shrink": 0.6, "label": "F1"},
                 linewidths=0.0, linecolor="none", square=False)
 
-    # Highlight the best tool per row
     for i, sf in enumerate(mat.index):
         row_vals = mat.loc[sf].values
         if np.all(np.isnan(row_vals)):
@@ -256,7 +199,6 @@ def plot_heatmap_with_support(df_f1, outdir, title="Benchmark (F1 por herramient
     ax_hm.set_xticklabels(ax_hm.get_xticklabels(), rotation=45, ha="right", fontsize=14)
     ax_hm.set_title(f"", pad=12, fontsize=32)
 
-    # Support bar (horizontal), aligned by rows
     y_pos = np.arange(len(row_order))
     ax_sup.barh(y_pos, support.values, align="center")
     ax_sup.set_ylim(ax_hm.get_ylim())
@@ -269,7 +211,6 @@ def plot_heatmap_with_support(df_f1, outdir, title="Benchmark (F1 por herramient
         fig.savefig(outpath, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-# ===== Panel C: CD (Demšar) =====
 def mean_ranks_from_matrix(mat):
     tools = list(mat.columns)
     ranks_sum = {t: 0.0 for t in tools}
@@ -287,11 +228,10 @@ def mean_ranks_from_matrix(mat):
             continue
         vals_clean[nan_mask] = min_val - 1.0
 
-        order = np.argsort(-vals_clean)  # Descending (higher F1 is better)
+        order = np.argsort(-vals_clean)
         ranks = np.empty_like(order, dtype=float)
         ranks[order] = np.arange(1, len(vals_clean) + 1)
 
-        # Average of ties (excluding disguised NaNs)
         for v in np.unique(vals_clean):
             idx = np.where(vals_clean == v)[0]
             if len(idx) > 1 and v != (min_val - 1.0):
@@ -309,14 +249,9 @@ def mean_ranks_from_matrix(mat):
 def compute_cd(k, N, alpha=0.05):
     if N <= 0:
         raise ValueError("There are no valid rows (superfamilies) to compute the critical difference (CD).")
-    if SCIPY_AVAILABLE:
-        q = float(studentized_range.isf(alpha, k, np.inf) / math.sqrt(2.0))
-        return q * math.sqrt(k * (k + 1) / (6.0 * N))
-    else:
-        raise RuntimeError(
-            "SciPy is not available. Install SciPy to compute the critical difference (CD) accurately:\n"
-            "  pip install scipy\n"
-        )
+
+    q = float(studentized_range.isf(alpha, k, np.inf) / math.sqrt(2.0))
+    return q * math.sqrt(k * (k + 1) / (6.0 * N))
 
 def group_nonsignificant(mean_ranks_sorted, CD):
     segments = []
@@ -334,12 +269,12 @@ def group_nonsignificant(mean_ranks_sorted, CD):
         if jmax > i:
             segments.append((mean_ranks_sorted[i][1], mean_ranks_sorted[jmax][1]))
         i += 1
-    # Remove contained segments
+
     cleaned = []
     for s in segments:
         if not any((s[0] >= t[0] and s[1] <= t[1]) and s != t for t in segments):
             cleaned.append(s)
-    # Vertical levels to avoid overlaps
+
     levels = []
     for s in cleaned:
         level = 0
@@ -357,7 +292,7 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
         raise ValueError("At least 2 tools are required for the critical difference (CD).")
 
     CD = compute_cd(k, N, alpha=alpha)
-    items = sorted(mean_ranks.items(), key=lambda x: x[1])  # mejor rank primero
+    items = sorted(mean_ranks.items(), key=lambda x: x[1])
     tool_ranks = [r for _, r in items]
 
     fig, ax = plt.subplots(figsize=(10, 2.8))
@@ -377,7 +312,6 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
 
     ax.scatter(tool_ranks, [0] * k, s=28, color="black", zorder=3)
 
-    # Alternate labels above/below for readability
     for i, (name, rank) in enumerate(items):
         if i % 2 == 0:
             ax.text(rank, -0.25, name, ha="center", va="top", fontsize=9)
@@ -389,8 +323,7 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
     ax.set_yticks([])
     ax.set_xlabel("Rank (1 = Best)")
 
-    segs = group_nonsignificant(items, CD)  # (x_start, x_end, level)
-    for (x0, x1, lvl) in segs:
+    segs = group_nonsignificant(items, CD)     for (x0, x1, lvl) in segs:
         y = 0.9 - lvl * 0.18
         ax.hlines(y=y, xmin=x0, xmax=x1, color="black", linewidth=3, alpha=0.7)
 
@@ -401,23 +334,17 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
 
 
 def _assign_label_levels(xvals, min_dx=0.35, levels=(-0.25, 0.25, -0.50, 0.50, -0.75, 0.75)):
-    """
-    Given a set of x positions (sorted), assign vertical levels to labels to avoid overlaps 
-    when two x values are closer than min_dx. Return a list of offsets and segments from 
-    (x, 0) → (x, y_label) to draw leader lines.
-    """
     last_at_level = [-1e9 for _ in levels]
     y_offsets = []
     segs = []
     for x in xvals:
-        # Choose the first level whose last x is sufficiently far away
+
         chosen = None
         for li, lastx in enumerate(last_at_level):
             if abs(x - lastx) >= min_dx:
                 chosen = li
                 break
         if chosen is None:
-            # If none has enough space, use the last level and accept the closeness
             chosen = len(levels) - 1
         last_at_level[chosen] = x
         y = levels[chosen]
@@ -432,10 +359,10 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
     tools = list(mean_ranks.keys())
     k = len(tools)
     if k < 2:
-        raise ValueError("Se requieren al menos 2 herramientas para el CD.")
+        raise ValueError("It is required at least 2 tools for the CD.")
 
     CD = compute_cd(k, N, alpha=alpha)
-    items = sorted(mean_ranks.items(), key=lambda x: x[1])  # Best rank first
+    items = sorted(mean_ranks.items(), key=lambda x: x[1])
     tool_names = [n for n, _ in items]
     tool_ranks = [r for _, r in items]
 
@@ -444,7 +371,6 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
     ax.set_ylim(-1.2, 2.5)
     ax.hlines(y=0, xmin=1, xmax=k, color="black", linewidth=1.2)
 
-    # CD bar
     y_cd = 1.6
     left = (k - CD) / 2.0
     right = left + CD
@@ -453,7 +379,6 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
     ax.text((left + right) / 2.0, y_cd + 0.2, f"CD (α={alpha:.2g}) = {CD:.2f}",
             ha="center", va="bottom", fontsize=9)
 
-    # puntos
     ax.scatter(tool_ranks, [0] * k, s=30, color="black", zorder=3)
 
     y_offsets, leaders = _assign_label_levels(tool_ranks, min_dx=0.40)
@@ -461,7 +386,6 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
         ax.text(x, yoff, name, ha="center",
                 va="bottom" if yoff > 0 else "top", fontsize=9)
     
-    # Leader lines
     for (x0, y0), (x1, y1) in leaders:
         ax.plot([x0, x1], [y0, y1], lw=0.8, color="black", alpha=0.8, zorder=2)
 
@@ -470,8 +394,7 @@ def plot_critical_difference(df_f1, outdir, alpha=0.05, formats=("pdf",)):
     ax.set_yticks([])
     ax.set_xlabel("Rank (1 = Best)")
 
-    # Non-significant segments
-    segs = group_nonsignificant(items, CD)  # (x_start, x_end, level)
+    segs = group_nonsignificant(items, CD)
     for (x0, x1, lvl) in segs:
         y = 0.95 - lvl * 0.18
         ax.hlines(y=y, xmin=x0, xmax=x1, color="black", linewidth=3, alpha=0.7)
@@ -506,21 +429,19 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
 
     from sklearn.linear_model import LinearRegression
     import numpy as np
-    # Average rank per tool
+
     mat = df_f1.pivot(index="Superfamily_norm", columns="Tool", values="F1")
     mean_ranks, N = mean_ranks_from_matrix(mat)
 
-    # Build tuples (date, rank, name)
     rows = []
     for tool, rank in mean_ranks.items():
-        # Find the date by matching the normalized name
         match = None
         for k in RELEASES.keys():
             if _norm_tool_name(tool).lower() == _norm_tool_name(k).lower():
                 match = k
                 break
         if match is None:
-            continue  # If no date is found, omit it
+            continue
         date_str = RELEASES[match]
         dt = datetime.strptime(date_str, "%B %Y")
         rows.append((match, dt, rank))
@@ -528,21 +449,19 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
     if not rows:
         return
 
-    rows.sort(key=lambda x: x[1])  # by date
+    rows.sort(key=lambda x: x[1])
     names = [r[0] for r in rows]
     dates = [r[1] for r in rows]
     ranks = [r[2] for r in rows]
 
     fig, ax = plt.subplots(figsize=(10.5, 3.6))
     ax.scatter(dates, ranks, s=30, color="black", zorder=3)
-    ax.invert_yaxis()  # 1 up = best
+    ax.invert_yaxis()
     ax.set_ylabel("Mean rank (1 = Best)")
     ax.set_xlabel("Release date")
 
-    # X axis format
     fig.autofmt_xdate(rotation=30, ha="right")
 
-    # Non-overlapping labels (same logic as CD, but on a time axis)
     import matplotlib.dates as mdates
     xnum = mdates.date2num(dates)
     y_offsets, leaders = _assign_label_levels(
@@ -557,7 +476,7 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
             va="bottom" if yoff > 0 else "top",
             fontsize=9,
         )
-    # Leader lines
+
     for (x0, y0), (x1, y1) in leaders:
         ax.plot(
             [mdates.num2date(x0), mdates.num2date(x1)],
@@ -572,7 +491,6 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
             zorder=2,
         )
 
-    # Baseline (optional) to guide the eye
     ax.hlines(
         y=np.mean(ranks),
         xmin=min(dates),
@@ -592,7 +510,6 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
         r2 = reg.score(x, y)
         slope_per_year = reg.coef_[0] * 365  # Rank change per year
 
-        # Draw a red line
         order = np.argsort(xnum)
         ax.plot(
             np.array(dates)[order],
@@ -606,7 +523,6 @@ def plot_timeline_rank_vs_release(df_f1, outdir, formats=("pdf",)):
 
         print(f"Slope ≈ {slope_per_year:.3f} rank units / year (R²={r2:.3f})")
 
-    # Save plot
     for fmt in formats:
         outpath = os.path.join(outdir, f"panel_D_timeline_rank_vs_release.{fmt}")
         fig.savefig(outpath, dpi=300, bbox_inches="tight")
@@ -617,14 +533,11 @@ def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    # Read the Excel (wide format) and produce a long DataFrame with F1 + Support
     df_f1, tools_sorted = read_f1_wide_excel_with_support(args.input, sheet=args.sheet)
 
-    # Consolidated (long-format) CSV
     df_out = df_f1[["Tool", "Superfamily_norm", "Superfamily", "F1", "Support"]].copy()
     df_out["__rank"] = df_out["Superfamily_norm"].apply(rank_of_superfamily)
     
-    # Order: tools A–Z and superfamilies in fixed order
     df_out = df_out.sort_values(
         by=["Tool", "__rank", "Superfamily"],
         key=lambda col: col if col.name != "Tool" else col.str.upper()
@@ -635,11 +548,9 @@ def main():
     print(f"   Detected tools: {', '.join(tools_sorted)}")
     print(f"   Superfamilies (unique): {df_out['Superfamily'].nunique()} | Total files: {len(df_out)}")
 
-    # Panel A: Heatmap + PanelB: support bar
-    plot_heatmap_with_support(df_f1, outdir=args.outdir, title=args.title, formats=tuple(args.formats))
+    plot_heatmap_with_support(df_f1, outdir=args.outdir, formats=tuple(args.formats))
     print(f"  Figure Panel A+B (heatmap+soporte) at: {args.outdir}")
 
-    # Panel C: CD (Demšar)
     try:
         plot_critical_difference(df_f1, outdir=args.outdir, alpha=args.alpha, formats=tuple(args.formats))
         print(f"  Figure Panel C (CD) at: {args.outdir}")

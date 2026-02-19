@@ -49,13 +49,13 @@ diccionario = {
 
 }
 
-df = pd.read_excel('clasificacion_normalizada_simon.xlsx')
+df = pd.read_excel('classification_normalized.xlsx')
 df = df.fillna("UNKNOWN")
 
 modelos = ['CREATE', 'TERL', 'NeuralTE', 'DeepTE', 'TEClass2', 'Terrier', 'ClassifyTE']
 niveles = ['class', 'order', 'SF']  # SF = Superfamily
 
-# Original col
+# Original columns
 original_cols = {
     'class': 'Original_class',
     'order': 'Original_order',
@@ -69,7 +69,7 @@ for key, variantes in diccionario.items():
     if len(partes) == 3:
         clase, orden, superfam = partes
     else:
-        clase = orden = superfam = "No encontrada"
+        clase = orden = superfam = "Not found"
     for v in variantes:
         mapping[v] = [clase, orden, superfam]
 
@@ -77,7 +77,7 @@ for modelo in modelos:
     df[modelo+"_SF_std"] = [mapping[str(df.loc[x, modelo+"_SF"]).upper()][2] for x in range(df.shape[0])]
 
 print(df)
-df.to_excel('clasificacion_normalizada_simon_v2.xlsx', index=False)
+df.to_excel('classification_normalized_v2.xlsx', index=False)
 
 resumen = []
 
@@ -93,7 +93,7 @@ for modelo in modelos:
             y_pred = df[f'{modelo}_{nivel}'].str.upper()
 
         if len(y_true) == 0:
-            print(f'⚠️ No hay datos válidos para {modelo} nivel {nivel}')
+            print(f'There are no valid data for {modelo} at level {nivel}')
             continue
 
         resumen.append({
@@ -108,27 +108,21 @@ for modelo in modelos:
         print(f'\n--- Model metrics {modelo} at  level {nivel} ---')
         print(classification_report(y_true, y_pred, zero_division=0))
 
-        # Create the confusion matrix
         all_classes = sorted(set(list(y_true) + list(y_pred)))
         snn_cm = confusion_matrix(y_true, y_pred, labels=all_classes)
         num_classes = len(pd.concat([y_true, y_pred]).unique())
 
-
-        # Crear un DataFrame de la matriz de confusión
         snn_df_cm = pd.DataFrame(snn_cm, index=all_classes, columns=all_classes)
 
-        # Create a DataFrame from the confusion matrix
         plt.figure(figsize=(20, 14))
         plt.imshow(snn_df_cm, interpolation='nearest', cmap=plt.cm.Blues)
         plt.title(f'{modelo} {nivel}')
         plt.colorbar()
 
-        # Label the X and Y axes
         tick_marks = np.arange(len(all_classes))
         plt.xticks(tick_marks, all_classes, rotation=45, ha='right', fontsize=12)
         plt.yticks(tick_marks, all_classes, fontsize=12)
 
-        # Add annotations to each cell
         for i in range(snn_cm.shape[0]):
             for j in range(snn_cm.shape[1]):
                 plt.text(j, i, snn_cm[i, j],
@@ -143,7 +137,7 @@ for modelo in modelos:
         plt.close()
 
 df_resumen = pd.DataFrame(resumen)
-df_resumen.to_excel('Resumen_metricas_modelos_niveles.xlsx', index=False)
+df_resumen.to_excel('metrics_brief_models_levels_all.xlsx', index=False)
 
 # metrics by each kingdom
 fungi = [te.id.split(" ")[0] for te in SeqIO.parse("dataset/PanTEon_DB_subset_fungi.fasta", "fasta")]
@@ -164,7 +158,7 @@ for modelo in modelos:
             y_pred = df_fungi[f'{modelo}_{nivel}'].str.upper()
 
         if len(y_true) == 0:
-            print(f'⚠️ There is no valid data for {modelo} level {nivel}')
+            print(f'There is no valid data for {modelo} at level {nivel}')
             continue
 
         resumen.append({
@@ -179,27 +173,21 @@ for modelo in modelos:
         print(f'\n--- Model metrics {modelo} at level {nivel} Fungi ---')
         print(classification_report(y_true, y_pred, zero_division=0))
 
-        # Create the confusion matrix
         all_classes = sorted(set(list(y_true) + list(y_pred)))
         snn_cm = confusion_matrix(y_true, y_pred, labels=all_classes)
         num_classes = len(pd.concat([y_true, y_pred]).unique())
 
-
-        # Create a DataFrame from the confusion matrix
         snn_df_cm = pd.DataFrame(snn_cm, index=all_classes, columns=all_classes)
 
-        # Visualize directly with Matplotlib
         plt.figure(figsize=(20, 14))
         plt.imshow(snn_df_cm, interpolation='nearest', cmap=plt.cm.Blues)
         plt.title(f'{modelo} {nivel}')
         plt.colorbar()
 
-        # Label the X and Y axes
         tick_marks = np.arange(len(all_classes))
         plt.xticks(tick_marks, all_classes, rotation=45, ha='right', fontsize=12)
         plt.yticks(tick_marks, all_classes, fontsize=12)
 
-        # Add annotations to each cell
         for i in range(snn_cm.shape[0]):
             for j in range(snn_cm.shape[1]):
                 plt.text(j, i, snn_cm[i, j],
@@ -214,7 +202,7 @@ for modelo in modelos:
         plt.close()
 
 df_resumen = pd.DataFrame(resumen)
-df_resumen.to_excel('Resumen_metricas_modelos_niveles_fungi.xlsx', index=False)
+df_resumen.to_excel('metrics_brief_models_levels_fungi.xlsx', index=False)
 
 resumen = []
 df_plants = df[df["TE_ID"].isin(plants)]
@@ -230,7 +218,7 @@ for modelo in modelos:
             y_pred = df_plants[f'{modelo}_{nivel}'].str.upper()
 
         if len(y_true) == 0:
-            print(f'⚠️ There is no valid data for {modelo} level {nivel}')
+            print(f'There is no valid data for {modelo} level {nivel}')
             continue
 
         resumen.append({
@@ -245,27 +233,21 @@ for modelo in modelos:
         print(f'\n--- Model metrics {modelo} at level {nivel} Plants ---')
         print(classification_report(y_true, y_pred, zero_division=0))
 
-        # Create the confusion matrix
         all_classes = sorted(set(list(y_true) + list(y_pred)))
         snn_cm = confusion_matrix(y_true, y_pred, labels=all_classes)
         num_classes = len(pd.concat([y_true, y_pred]).unique())
 
-
-        # Create a DataFrame from the confusion matrix
         snn_df_cm = pd.DataFrame(snn_cm, index=all_classes, columns=all_classes)
 
-        # Visualize directly with Matplotlib
         plt.figure(figsize=(20, 14))
         plt.imshow(snn_df_cm, interpolation='nearest', cmap=plt.cm.Blues)
         plt.title(f'{modelo} {nivel}')
         plt.colorbar()
 
-        # Label the X and Y axes
         tick_marks = np.arange(len(all_classes))
         plt.xticks(tick_marks, all_classes, rotation=45, ha='right', fontsize=12)
         plt.yticks(tick_marks, all_classes, fontsize=12)
 
-        # Add annotations to each cell
         for i in range(snn_cm.shape[0]):
             for j in range(snn_cm.shape[1]):
                 plt.text(j, i, snn_cm[i, j],
@@ -280,7 +262,7 @@ for modelo in modelos:
         plt.close()
 
 df_resumen = pd.DataFrame(resumen)
-df_resumen.to_excel('Resumen_metricas_modelos_niveles_plants.xlsx', index=False)
+df_resumen.to_excel('metrics_brief_models_levels_plants.xlsx', index=False)
 
 resumen = []
 df_animals = df[df["TE_ID"].isin(animals)]
@@ -296,7 +278,7 @@ for modelo in modelos:
             y_pred = df_animals[f'{modelo}_{nivel}'].str.upper()
 
         if len(y_true) == 0:
-            print(f'⚠️ There is no valid data for {modelo} level {nivel}')
+            print(f'There is no valid data for {modelo} level {nivel}')
             continue
 
         resumen.append({
@@ -311,27 +293,21 @@ for modelo in modelos:
         print(f'\n--- Model metrics {modelo} at level {nivel} Animals ---')
         print(classification_report(y_true, y_pred, zero_division=0))
 
-        # Create the confusion matrix
         all_classes = sorted(set(list(y_true) + list(y_pred)))
         snn_cm = confusion_matrix(y_true, y_pred, labels=all_classes)
         num_classes = len(pd.concat([y_true, y_pred]).unique())
 
-
-        # Create a DataFrame from the confusion matrix
         snn_df_cm = pd.DataFrame(snn_cm, index=all_classes, columns=all_classes)
 
-        # Visualize directly with Matplotlib
         plt.figure(figsize=(20, 14))
         plt.imshow(snn_df_cm, interpolation='nearest', cmap=plt.cm.Blues)
         plt.title(f'{modelo} {nivel}')
         plt.colorbar()
 
-        # Label the X and Y axes
         tick_marks = np.arange(len(all_classes))
         plt.xticks(tick_marks, all_classes, rotation=45, ha='right', fontsize=12)
         plt.yticks(tick_marks, all_classes, fontsize=12)
 
-        # Add annotations to each cell
         for i in range(snn_cm.shape[0]):
             for j in range(snn_cm.shape[1]):
                 plt.text(j, i, snn_cm[i, j],
@@ -346,4 +322,4 @@ for modelo in modelos:
         plt.close()
 
 df_resumen = pd.DataFrame(resumen)
-df_resumen.to_excel('Resumen_metricas_modelos_niveles_animals.xlsx', index=False)
+df_resumen.to_excel('metrics_brief_models_levels_animals.xlsx', index=False)
