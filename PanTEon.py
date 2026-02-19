@@ -17,7 +17,6 @@ import sys
 import seaborn as sn
 import random
 import re
-import subprocess
 from collections import Counter
 import shutil
 import argparse
@@ -44,7 +43,6 @@ superf_dict = {'LTR': 0, 'COPIA': 1, 'GYPSY': 2, 'ERV': 3, 'BELPAO': 4, 'LINE': 
                    'KOLOBOK': 28, 'ACADEM-1': 29}
 
 class TrainingHistory:
-    """Keras like history object for training"""
     def __init__(self, log_history):
         self.history = {
             'loss': [],
@@ -162,7 +160,6 @@ def parse_args():
 
 
 def plot_training_metrics(history, model, path="."):
-    # plot metrics
     plt.figure()
     plt.plot(history.history['val_f1_m'])
     plt.plot(history.history['f1_m'])
@@ -203,15 +200,14 @@ def metrics(Y_validation,predictions, num_classes, model, reportDir):
     print(f'    -> Precision: {pre}')
     print(f'\n     -> clasification report:\n', classification_report(Y_validation, predictions))
     print(f'\n     -> confusion matrix:\n',confusion_matrix(Y_validation, predictions))
-    #Creamos la matriz de confusión
+
     snn_cm = confusion_matrix(Y_validation, predictions)
     num_classes = min(num_classes, len(snn_cm))
 
-    # Visualizamos la matriz de confusión
     snn_df_cm = pd.DataFrame(snn_cm, range(num_classes), range(num_classes))
     plt.figure(figsize = (20,14))
-    sn.set(font_scale=1.4) #for label size
-    sn.heatmap(snn_df_cm, annot=True, annot_kws={"size": 12}) # font size
+    sn.set(font_scale=1.4)
+    sn.heatmap(snn_df_cm, annot=True, annot_kws={"size": 12})
     plt.savefig(f'{reportDir}/confusionMatrix_{model}.png', bbox_inches='tight', dpi=500)
     return acc, f1, rec, pre
 
@@ -268,6 +264,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 info(
                     f"Using the found model at {output_directory}/NeuralTE_retrained_model.keras. Skipping retraining....")
             else:
+                start_datagen = time.time()
                 internal_kmer_sizes = [1, 3]
                 terminal_kmer_sizes = [1, 2, 3]
                 X_feature_len = 309
@@ -292,6 +289,9 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 Y_train_one_hot = np.array(to_categorical(Y_train, num_classes))
                 Y_dev_one_hot = np.array(to_categorical(Y_dev, num_classes))
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
 
                 batch_size = 512
                 num_epochs = 100
@@ -378,6 +378,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 info(
                     f"Using the found model at {output_directory}/CREATE_retrained_model.keras. Skipping retraining....")
             else:
+                start_datagen = time.time()
                 k = 7
                 l = 600
                 CREATE.superf_dict = superf_dict
@@ -406,8 +407,11 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 Y_train_one_hot = to_categorical(Y_train, int(num_classes))
                 Y_dev_one_hot = to_categorical(Y_dev, int(num_classes))
 
-                batch_size = 32
+                batch_size = 45
                 num_epochs = 10
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
 
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
@@ -480,8 +484,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 model.save(f'{output_directory}/CREATE_retrained_model.keras')
                 plot_training_metrics(history, "CREATE", report_dir)
 
-                predicted_classes = model.predict([X_kmer_test, X_oh_test])
-                predicted_classes = np.argmax(predicted_classes, axis=1)
+                pred_probs = model.predict((X_kmer_test, X_oh_test), batch_size=batch_size, verbose=1)
+                predicted_classes = np.argmax(pred_probs, axis=1)
                 acc, f1, rec, pre = metrics(Y_test, predicted_classes, num_classes, "CREATE", report_dir)
                 model_metrics[model_name] = [acc, f1, rec, pre]
 
@@ -493,12 +497,16 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f"{output_directory}/ClassifyTE_retrained_model.pkl"):
                 info(f"Using the found model at {output_directory}/ClassifyTE_retrained_model.pkl. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 ClassifyTE.superf_dict = superf_dict
                 ClassifyTE.script_dir = PanTEon_dir
 
                 X_train, Y_train = ClassifyTE.load_data(training_fasta, threads, "T")
                 X_test, Y_test = ClassifyTE.load_data(test_fasta, threads, "T")
 
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
                 if base_models is not None and os.path.exists(f"{base_models}/ClassifyTE_retrained_model.pkl"):
                     info(f"Initializing weights for {model_name} from {base_models}/ClassifyTE_retrained_model.pkl")
                     model = joblib.load(f"{base_models}/ClassifyTE_retrained_model.pkl")
@@ -516,14 +524,16 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f"{output_directory}/DeepTE_retrained_model.keras"):
                 info(f"Using the found model at {output_directory}/DeepTE_retrained_model.keras. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 DeepTE.superf_dict = superf_dict
                 X_train, Y_train = DeepTE.load_data(training_fasta)
                 X_dev, Y_dev = DeepTE.load_data(val_fasta)
                 X_test, Y_test = DeepTE.load_data(test_fasta)
 
-                X_train = X_train.reshape(X_train.shape[0], 1, 16384, 1)  ##shape[0] indicates sample number
+                X_train = X_train.reshape(X_train.shape[0], 1, 16384, 1)
                 X_dev = X_dev.reshape(X_dev.shape[0], 1, 16384, 1)
-                X_test = X_test.reshape(X_test.shape[0], 1, 16384, 1)  ##kmer == 3 so it would be 64
+                X_test = X_test.reshape(X_test.shape[0], 1, 16384, 1)
                 X_train = X_train.astype('float64')
                 X_dev = X_dev.astype('float64')
                 X_test = X_test.astype('float64')
@@ -533,6 +543,9 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 batch_size = 512
                 num_epochs = 100
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
                           f"Please reduce the number of GPus or increase the number of samples.")
@@ -618,6 +631,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f"{output_directory}/TERL_Classify_retrained_model"):
                 info(f"Using the found model at {output_directory}/TERL_Classify_retrained_model. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 TERL.superf_dict = superf_dict
                 max_len = 19926
                 X_train, _ = TERL.data_handler(training_fasta, max_len=max_len, mode="P")
@@ -629,10 +644,13 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 classes = np.unique(np.concatenate([Y_train, Y_dev, Y_test])).tolist()
                 num_classes_terl = len(classes)
-                vocab_size = len(['A', 'C', 'G', 'T', 'N', 5])  # 5 is the background signal for padding
+                vocab_size = len(['A', 'C', 'G', 'T', 'N', 5])
                 shuffled = np.random.permutation(range(Y_train.shape[0]))
                 X_train = X_train[shuffled]
                 Y_train = Y_train[shuffled]
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
 
                 # Default parameters
                 architecture = ["conv", "pool", "conv", "pool", "conv", "pool", "fc", "fc"]
@@ -712,10 +730,13 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f'{output_directory}/Inpactor2_Class_retrained_model.keras'):
                 info(f"Using the found model at {output_directory}/Inpactor2_Class_retrained_model.keras. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 Inpactor2_Class.superf_dict = superf_dict
                 X_train, Y_train = Inpactor2_Class.load_data(training_fasta)
                 X_dev, Y_dev = Inpactor2_Class.load_data(val_fasta)
                 X_test, Y_test = Inpactor2_Class.load_data(test_fasta)
+
                 if base_models is not None and os.path.exists(f"{base_models}/scaler.pkl"):
                     info(f"Initializing weights for Scaling at {model_name} from {base_models}/scaler.pkl")
                     scaler = joblib.load(f"{base_models}/scaler.pkl")
@@ -744,6 +765,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 batch_size = 512
                 num_epochs = 200
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
+
                 if batch_size * gpus > min(Y_train_one_hot.shape[0], Y_dev_one_hot.shape[0], Y_test_one_hot.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
                           f"Please reduce the number of GPus or increase the number of samples.")
@@ -833,6 +858,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     if len(bad_seqs) > 0:
                         error(f"there are some ID sequences without required character '/' in classification for Terrier:")
 
+                start_datagen = time.time()
+
                 Terrier.superf_dict = {key.split("/")[-1]: value for key, value in superf_dict.items()}
                 orders = list(set([k.split("/")[-2] for k in superf_dict.keys()]))
 
@@ -868,6 +895,9 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                                                            num_workers=0)
                 dev_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0)
                 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, num_workers=0)
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
 
                 if base_models is not None and os.path.exists(f"{base_models}/Terrier_retrained_model.pt"):
                     info(f"Initializing weights for {model_name} from {base_models}/Terrier_retrained_model.pt")
@@ -963,6 +993,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f"{output_directory}/BERTE_retrained_model.keras"):
                 info(f"Using the found model at {output_directory}/BERTE_retrained_model.keras. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 BERTE.superf_dict = superf_dict
                 input_4mer_shape = (1, 4 ** 4 + 256, 1)
                 input_5mer_shape = (1, 4 ** 5 + 256, 1)
@@ -992,6 +1024,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
 
                 batch_size = 64
                 num_epochs = 50
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
+
                 if batch_size * gpus > min(X_train_4mer.shape[0], X_val_4mer.shape[0], X_test_4mer.shape[0]):
                     error(f"There are no enough samples for running {gpus} GPUs. You would need at least {batch_size * gpus}. "
                           f"Please reduce the number of GPus or increase the number of samples.")
@@ -1073,6 +1109,8 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
             if os.path.exists(f"{output_directory}/TEClass2_retrained_model"):
                 info(f"Using the found model at {output_directory}/TEClass2_retrained_model. Skipping retraining....")
             else:
+                start_datagen = time.time()
+
                 TEClass2.superf_dict = superf_dict
                 TEClass2.setup_device_and_log()
                 # define the training arguments
@@ -1083,15 +1121,15 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     bf16=True,
                     fp16=False,
                     output_dir=work_dir,
-                    num_train_epochs=100,  # 100
-                    per_device_train_batch_size=300,  # 210
-                    gradient_accumulation_steps=4,
+                    max_steps=2500,   # num_train_epochs=100
+                    per_device_train_batch_size=192,  # 210
+                    gradient_accumulation_steps=2,
                     per_device_eval_batch_size=300,  # 210
                     eval_strategy="steps",
-                    eval_steps=2000,
+                    eval_steps=500,
                     eval_accumulation_steps=10,
                     save_strategy="steps",
-                    save_steps=2000,
+                    save_steps=500,
                     save_total_limit=2,
                     disable_tqdm=False,
                     dataloader_num_workers=threads,
@@ -1101,14 +1139,17 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     group_by_length=False,
                     metric_for_best_model='eval_f1',
                     load_best_model_at_end=True,
-                    warmup_steps=200,
-                    weight_decay=0.01,
-                    logging_steps=200,
+                    logging_steps=50,
                     logging_dir=f"{work_dir}/logs",
                     report_to="tensorboard",
                     optim="adamw_torch_fused",
                     ddp_backend=None,
+                    learning_rate=3e-4,
+                    lr_scheduler_type="cosine",
+                    warmup_ratio=0.03,
+                    weight_decay=0.01,
                     ddp_find_unused_parameters=False,
+                    label_smoothing_factor=0.05,
                 )
 
                 joined_seqs = [x for x in SeqIO.parse(training_fasta, "fasta")]
@@ -1125,6 +1166,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                 dataset_test = TEClass2.TransposonDataset(dataset_test, datadict_, tokenizer)
 
                 vocab_file = TEClass2.load_vocab(f"{PanTEon_dir}/data/5mer_vocab")
+
+                end_datagen = time.time()
+                info(f"Data generation for model {model_name} done!! [{end_datagen - start_datagen}]......")
+
                 if base_models is not None and os.path.exists(f"{base_models}/TEClass2_retrained_model"):
                     info(f"Initializing weights for {model_name} from {base_models}/TEClass2_retrained_model")
                     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -1192,7 +1237,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                         for p in model.score.parameters():
                             p.requires_grad = True
 
-                    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                    #model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
                     model.config.use_cache = False
 
                     training_args.num_train_epochs = 10
@@ -1290,7 +1335,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
                     info(f"Total trainable parameters:  {total_trainable:,}")
 
-                    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                    #model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
                     model.config.use_cache = False
 
                     sample_weight = dataset_train.sample_weight
@@ -1610,7 +1655,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
                     dataloader_pin_memory=True,
                     report_to="none",
                     fp16=False,
-                    bf16=torch.cuda.is_available(),  # usa bf16 en GPU si está disponible
+                    bf16=torch.cuda.is_available(),
                     disable_tqdm=True,
                 )
 
@@ -1620,9 +1665,9 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
                     sample_weight=dummy_sample_weight,
                     model=model,
                     args=pred_args,
-                    compute_metrics=None,  # o deja tu compute_metrics si quieres métricas (si hay labels)
-                    train_dataset=None,  # no entrenamos
-                    eval_dataset=new_dataset  # el dataset nuevo va aquí
+                    compute_metrics=None,
+                    train_dataset=None,
+                    eval_dataset=new_dataset
                 )
 
                 pred_out = infer_trainer.predict(new_dataset)
@@ -1745,22 +1790,13 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
 
 
 def load_config(json_path):
-    """
-    Carga un archivo JSON de configuración y retorna sus variables.
-
-    Parámetros:
-        json_path (str): Ruta al archivo JSON (por ejemplo, 'config.json').
-
-    Retorna:
-        tuple: (superf_dict, inv_superf_dict, num_classes, min_prob, species_group)
-    """
     if not os.path.exists(json_path):
         error(f"The configuration JSON file {json_path} was not found.")
     with open(json_path, 'r') as f:
         data = json.load(f)
 
     superf_dict = data.get('superf_dict', {})
-    inv_superf_dict = {int(k): v for k, v in data.get('inv_superf_dict', {}).items()}  # convierte claves a int
+    inv_superf_dict = {int(k): v for k, v in data.get('inv_superf_dict', {}).items()}
     num_classes = data.get('num_classes', 0)
     min_prob = data.get('min_prob', 0.0)
     species_group = data.get('species_group', 'unknown')
@@ -1857,7 +1893,7 @@ def check_taxon_in_db(metadata_df, taxon, tax_cols):
     # If not found, check similar words
     close = difflib.get_close_matches(taxon_norm, sorted(universe), n=10, cutoff=0.6)
 
-    # También sugiere coincidencias por substring (útil para términos largos)
+    # It also suggests substring matches (useful for long terms).
     contains = [x for x in universe if taxon_norm in x]
     contains = sorted(contains)[:10]
 
@@ -1876,7 +1912,6 @@ def check_req_class_in_db(fasta_file, req_class):
 
     req_class_norm = req_class.strip().lower()
 
-    # Construye universo de tokens a partir del FASTA
     universe = set()
     with open(fasta_file, "r", encoding="utf-8", errors="replace") as fin:
         for line in fin:
@@ -1912,9 +1947,9 @@ def library(base_path, taxon, req_class, view_only):
         metadata_file = next(data_path.glob("PanTEon_Database_metadata_v*.csv"))
         fasta_file = next(data_path.glob("PanTEon_Database_v*.fasta"))
     except StopIteration:
-        error("PanTEon database files not found in data directory")
+        error("PanTEon Database files not found in data directory")
 
-        # Extract version (v.X.Y.Z)
+    # Extract version (v.X.Y.Z)
     version_pattern = r"_v([0-9]+(?:\.[0-9]+)*)"
     version_match = re.search(version_pattern, metadata_file.name)
     version = version_match.group(1) if version_match else "unknown"
@@ -1932,7 +1967,6 @@ def library(base_path, taxon, req_class, view_only):
         if file_path.stat().st_size == 0:
             error(f"Required file is empty: {file_path}")
 
-    # ---- Load metadata ----
     try:
         metadata_df = pd.read_csv(
             metadata_file,
@@ -1952,7 +1986,7 @@ def library(base_path, taxon, req_class, view_only):
     req_class = check_req_class_in_db(fasta_file, req_class)
 
     if taxon is None:
-        # ALL species allowed
+        # All species allowed
         allowed_species = set(
             metadata_df["Species"]
             .astype(str)
@@ -2028,23 +2062,19 @@ def library(base_path, taxon, req_class, view_only):
     info("=" * 60 + "\n")
 
     if not view_only:
-        SeqIO.write(kept, f"PanTEonDB_{taxon}_{req_class}.fasta", "fasta")
+        if req_class is not None:
+            req_class = "_" + req_class
+        else:
+            req_class = ""
+        SeqIO.write(kept, f"PanTEonDB_{taxon}{req_class}.fasta", "fasta")
     return metadata_df
 
 
 def parse_header_get_id_and_label(rec_id: str, level: int = -1) -> Tuple[str, str]:
-    """
-    Para headers tipo: ID#A/B/C
-    - ID base: lo de antes de '#'
-    - label: por defecto el último componente (C). Con --level N (1-based) eliges A=1, B=2, C=3.
-    """
     if "#" not in rec_id:
-        # Si no hay '#', devolvemos todo como id y label vacío
         return rec_id, ""
 
     base_id, trail = rec_id.split("#", 1)
-    # rec.id en BioPython no contiene espacios (solo el primer token de la descripción),
-    # así que 'trail' ya debería ser "A/B/C" sin ' Folsomia'
     parts = trail.split("/")
     if not parts:
         return base_id, ""
@@ -2052,22 +2082,16 @@ def parse_header_get_id_and_label(rec_id: str, level: int = -1) -> Tuple[str, st
     if level == -1:
         label = parts[-1]
     else:
-        # level es 1-based; si se sale de rango, tomamos el último
         idx = level - 1
         label = parts[idx] if 0 <= idx < len(parts) else parts[-1]
-
     return base_id, label
 
 
 def read_labels_from_fasta(path: str, level: int = -1) -> Dict[str, str]:
-    """
-    Lee un FASTA y devuelve un dict: base_id -> label extraído.
-    """
     labels = {}
     for rec in SeqIO.parse(path, "fasta"):
         bid, lab = parse_header_get_id_and_label(rec.id, level=level)
-        if lab:  # solo guardamos si encontramos etiqueta
-            # Si hay duplicados de ID base, conservamos la primera aparición
+        if lab:
             labels.setdefault(bid, lab)
     return labels
 
@@ -2081,7 +2105,7 @@ def eval_from_fasta(true_fasta, pred_fasta, level, out_confusion, out_report):
     common = sorted(ids_true & ids_pred)
 
     if not common:
-        raise SystemExit("No hay IDs comunes entre ambos FASTA (comparando la parte antes de '#').")
+        error("There are no common IDs between the two FASTA files (comparing the portion before ‘#’).")
 
     y_true: List[str] = [true_map[i] for i in common]
     y_pred: List[str] = [pred_map[i] for i in common]
