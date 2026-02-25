@@ -1121,10 +1121,10 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     bf16=True,
                     fp16=False,
                     output_dir=work_dir,
-                    max_steps=2500,   # num_train_epochs=100
-                    per_device_train_batch_size=192,  # 210
+                    num_train_epochs=100,
+                    per_device_train_batch_size=64,  # 210
                     gradient_accumulation_steps=2,
-                    per_device_eval_batch_size=300,  # 210
+                    per_device_eval_batch_size=64,  # 210
                     eval_strategy="steps",
                     eval_steps=500,
                     eval_accumulation_steps=10,
@@ -1134,7 +1134,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     disable_tqdm=False,
                     dataloader_num_workers=threads,
                     dataloader_pin_memory=True,
-                    dataloader_persistent_workers=True,
+                    dataloader_persistent_workers=False,
                     dataloader_drop_last=False,
                     group_by_length=False,
                     metric_for_best_model='eval_f1',
@@ -1651,7 +1651,7 @@ def inference(fasta_file, work_dir, threads, class_num, models, output_directory
                 pred_args = TEClass2.TrainingArguments(
                     output_dir=f"{work_dir}/infer",
                     per_device_eval_batch_size=128,
-                    dataloader_num_workers=20,
+                    dataloader_num_workers=threads,
                     dataloader_pin_memory=True,
                     report_to="none",
                     fp16=False,
@@ -1815,7 +1815,7 @@ def generate_dict_classification(TE_library):
             print(f"    -> {bad_seq}")
         sys.exit(0)
 
-    classification = set([str(te.id).split(" ")[0].split("#")[1] for te in SeqIO.parse(TE_library, "fasta")])
+    classification = sorted({str(te.id).split(" ")[0].split("#")[1] for te in SeqIO.parse(TE_library, "fasta")})
     i = 0
     for cls in classification:
         superf_dict[cls] = i
