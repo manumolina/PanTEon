@@ -511,7 +511,7 @@ def training(TE_library, work_dir, threads, models, num_classes, output_director
                     info(f"Initializing weights for {model_name} from {base_models}/ClassifyTE_retrained_model.pkl")
                     model = joblib.load(f"{base_models}/ClassifyTE_retrained_model.pkl")
                 else:
-                    model = ClassifyTE.get_model()
+                    model = ClassifyTE.get_model(threads)
                 ClassifyTE.run_experiment(model, X_train, Y_train)
 
                 joblib.dump(model, f"{output_directory}/ClassifyTE_retrained_model.pkl")
