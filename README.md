@@ -311,4 +311,4 @@ Simon Orozco-Arias is supported by a fellowship within the “Generación D” i
 
 ## Citation
 if you use this framework, the database or any part of it (as the neural network architectures, functions, etc), please cite us as following:
-* Orozco-Arias, S., Ferrer-Pomer, I., Rodrigues de Goes, F., Gaviria-Orrego, S., Paschoal, A. R., Guyot, R., Gabaldon, T. (2026) Cross-kingdom deep learning framework guides the future design of transposable element classifiers. BioRxiv, 2026-01.
+* Orozco-Arias, S., Ferrer-Pomer, I., Rodrigues de Goes, F., Gaviria-Orrego, S., Gómiz-Fernández, J., Llatser-Torres, J., Paschoal, A. R., Guyot, R., Gabaldon, T. (2026) Cross-kingdom deep learning framework guides the future design of transposable element classifiers. BioRxiv, 2026-04.
