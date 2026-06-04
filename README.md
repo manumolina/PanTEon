@@ -162,6 +162,10 @@ After successfully installing PanTEon_env, you can test it using the testing dat
 ```
 conda activate PanTEon_env
 ```
+Sometimes, you will need to update some environment variables to point to the correct paths inside the conda environment:
+```
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+```
 Then, you should run the training module, using the following command. Some algorithms could take some minutes to complete the training, so please be patient:
 ```
 python3 PanTEon.py training -f Test_data/sequences_toy.fasta -t 2 -d Test_data/testing_models -w Test_data/work_dir -n all
