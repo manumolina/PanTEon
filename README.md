@@ -100,42 +100,47 @@ Alternatively, if you prefer install conda package in batches (to limit the RAM 
 
 1. batch: Environment creation
 ```
-conda create -n PanTEon_env python=3.10 pip setuptools wheel -c conda-forge -y
+conda create -n PanTEon_env python=3.10.18 -c conda-forge -y
 conda activate PanTEon_env
 ```
 
-2. batch: Bioinformatics and base packages
+2. batch: tensorflow + CUDA (Replace the CONDA_OVERRIDE_CUDA with your own version if you are using GPUs, otherwise you can safely keep that intact).
+```
+CONDA_OVERRIDE_CUDA=12.2 conda install -c conda-forge -c bioconda \
+  "tensorflow=2.18.0=cuda*" "tensorflow-base=2.18.0=cuda*" \
+  "tensorflow-estimator=2.18.0=cuda*" tensorboard=2.18.0 \
+  cudnn cuda-version=12 numpy=2.2.6 pandas=2.3.1 \
+  scikit-learn=1.7.1 scipy=1.15.2 matplotlib=3.10.5 \
+  seaborn=0.13.2 h5py=3.14.0 biopython=1.85 \
+  openpyxl=3.1.5 tqdm joblib requests statsmodels \
+  -y
+```
+
+3. batch: Bioinformatics and base packages
 ```
 conda install -c conda-forge -c bioconda \
-  libgcc-ng libstdcxx-ng \
-  biopython blast entrez-direct openjdk perl wget \
-  numpy scipy pandas scikit-learn statsmodels matplotlib seaborn plotly \
-  openpyxl h5py tqdm joblib requests pyyaml \
-  graphviz python-graphviz pydot xgboost \
+  blast entrez-direct openjdk perl wget \
+  graphviz pydot xgboost \
   -y
 ```
 
-3. batch: PyTorch + CUDA (Replace the CONDA_OVERRIDE_CUDA with your own version if you are using GPUs, otherwise you can safely keep that intact).
-```
-CONDA_OVERRIDE_CUDA=12.1 conda install -c pytorch -c nvidia -c conda-forge \
-  pytorch=2.5.* torchvision=0.20.* torchaudio=2.5.* torchmetrics=1.4.* pytorch-cuda=12.1 \
-  -y
-```
-
-4. batch: TensorFlow and Hugging Face installation by pip.
+4. batch: Pytoch and Hugging Face installation by pip.
 ```
 pip install \
-  tensorflow==2.18.0 \
-  tf-keras==2.18.0 \
-  transformers==4.46.3 \
+  torch==2.8.0 \
+  torchvision==0.23.0 \
+  torchmetrics==1.8.2 \
+  transformers==4.55.0 \
   accelerate==1.10.0 \
-  tokenizers==0.20.3 \
+  tokenizers==0.21.4 \
   safetensors==0.6.2 \
-  huggingface-hub==0.34.4
+  huggingface-hub==0.34.4 \
+  tf-keras==2.18.0
 ```
 
 5. batch: Final PanTEon's dependencies.
 ```
+pip install graphviz==0.21 plotly==6.5.0
 pip install --no-deps hierarchicalsoftmax==1.4.4
 
 pip install \
