@@ -155,6 +155,12 @@ pip install \
 
 Now download the latest version of the PanTEon Database ([(https://zenodo.org/records/18039747)](https://zenodo.org/records/18039747)) and place it in the data/ folder.
 
+Next step consists in giving execution permissions to extra tools:
+```
+chmod +x tools/ltrsearch
+chmod +x tools/itrsearch
+```
+
 Finally, access to PanTEon Database ([(https://zenodo.org/records/18039747)](https://zenodo.org/records/18039747)) and download the trained models you are interested in (e.g. All species, Animalia, Plantae, etc). This directory is the one you need to indicate in the -d parameter when using the inference module.
 
 ## Testing:
