@@ -96,6 +96,63 @@ Go to the PanTEon folder and find the file named "PanTEon_env.yml". Then, instal
 cd PanTEon
 conda env create -f PanTEon_env.yml
 ```
+Alternatively, if you prefer install conda package in batches (to limit the RAM usage and time), you can do that in the following way:
+
+1. batch: Environment creation
+```
+conda create -n PanTEon_env python=3.10 pip setuptools wheel -c conda-forge -y
+conda activate PanTEon_env
+```
+
+2. batch: Bioinformatics and base packages
+```
+conda install -c conda-forge -c bioconda \
+  libgcc-ng libstdcxx-ng \
+  biopython blast entrez-direct openjdk perl wget \
+  numpy scipy pandas scikit-learn statsmodels matplotlib seaborn plotly \
+  openpyxl h5py tqdm joblib requests pyyaml \
+  graphviz python-graphviz pydot xgboost \
+  -y
+```
+
+3. batch: PyTorch + CUDA (Replace the CONDA_OVERRIDE_CUDA with your own version if you are using GPUs, otherwise you can safely keep that intact).
+```
+CONDA_OVERRIDE_CUDA=12.1 conda install -c pytorch -c nvidia -c conda-forge \
+  pytorch=2.5.* torchvision=0.20.* torchaudio=2.5.* torchmetrics=1.4.* pytorch-cuda=12.1 \
+  -y
+```
+
+4. batch: TensorFlow and Hugging Face installation by pip.
+```
+pip install \
+  tensorflow==2.18.0 \
+  tf-keras==2.18.0 \
+  transformers==4.46.3 \
+  accelerate==1.10.0 \
+  tokenizers==0.20.3 \
+  safetensors==0.6.2 \
+  huggingface-hub==0.34.4
+```
+
+5. batch: Final PanTEon's dependencies.
+```
+pip install --no-deps hierarchicalsoftmax==1.4.4
+
+pip install \
+  anytree==2.13.0 \
+  attrs==25.4.0 \
+  click==8.3.1 \
+  dm-tree==0.1.9 \
+  filelock==3.18.0 \
+  fsspec==2025.7.0 \
+  jinja2==3.1.6 \
+  networkx==3.4.2 \
+  psutil==7.0.0 \
+  regex==2025.7.34 \
+  sympy==1.14.0 \
+  typer==0.20.0
+```
+
 Now download the latest version of the PanTEon Database ([(https://zenodo.org/records/18039747)](https://zenodo.org/records/18039747)) and place it in the data/ folder.
 
 Finally, access to PanTEon Database ([(https://zenodo.org/records/18039747)](https://zenodo.org/records/18039747)) and download the trained models you are interested in (e.g. All species, Animalia, Plantae, etc). This directory is the one you need to indicate in the -d parameter when using the inference module.
