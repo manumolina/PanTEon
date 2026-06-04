@@ -164,6 +164,7 @@ Next step consists in giving execution permissions to extra tools:
 ```
 chmod +x tools/ltrsearch
 chmod +x tools/itrsearch
+chmod +x tools/RMout_to_bed.pl
 ```
 
 Finally, access to PanTEon Database ([(https://zenodo.org/records/18039747)](https://zenodo.org/records/18039747)) and download the trained models you are interested in (e.g. All species, Animalia, Plantae, etc). This directory is the one you need to indicate in the -d parameter when using the inference module.
