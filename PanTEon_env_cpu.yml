@@ -1,0 +1,79 @@
+name: PanTEon_env_cpu
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - python=3.10.18
+
+  # Core scientific stack
+  - numpy=2.2.6
+  - pandas=2.3.1
+  - scipy=1.15.2
+  - scikit-learn=1.7.1
+  - matplotlib=3.10.5
+  - seaborn=0.13.2
+  - h5py=3.14.0
+  - statsmodels
+  - openpyxl=3.1.5
+  - tqdm
+  - joblib
+  - requests
+
+  # TensorFlow (CPU)
+  - tensorflow=2.18.0
+  - tensorflow-base=2.18.0
+  - tensorflow-estimator=2.18.0
+  - tensorboard=2.18.0
+
+  # Bioinformatics tools
+  - biopython=1.85
+  - blast
+  - entrez-direct
+  - openjdk
+  - perl
+  - wget
+
+  # Utilities
+  - graphviz
+  - pydot
+  - xgboost
+
+  # Pip support
+  - pip
+
+  - pip:
+      # PyTorch ecosystem (CPU)
+      - torch==2.8.0
+      - torchvision==0.23.0
+      - torchmetrics==1.8.2
+
+      # Hugging Face
+      - transformers==4.55.0
+      - accelerate==1.10.0
+      - tokenizers==0.21.4
+      - safetensors==0.6.2
+      - huggingface-hub==0.34.4
+
+      # TensorFlow compatibility
+      - tf-keras==2.18.0
+
+      # Visualization
+      - graphviz==0.21
+      - plotly==6.5.0
+
+      # PanTEon dependencies
+      - hierarchicalsoftmax==1.4.4
+      - anytree==2.13.0
+      - attrs==25.4.0
+      - click==8.3.1
+      - dm-tree==0.1.9
+      - filelock==3.18.0
+      - fsspec==2025.7.0
+      - jinja2==3.1.6
+      - networkx==3.4.2
+      - psutil==7.0.0
+      - regex==2025.7.34
+      - sympy==1.14.0
+      - typer==0.20.0
