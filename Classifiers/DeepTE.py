@@ -30,6 +30,7 @@ import seaborn as sn
 from tensorflow.keras.callbacks import ModelCheckpoint
 from sklearn.utils.class_weight import compute_class_weight
 import time
+import math
 
 
 # Superfamily dict
@@ -179,16 +180,17 @@ def run_experiment(model, X_train, Y_train, labels, X_dev, Y_dev, batch_size, nu
     X_dev = X_dev.astype("float32")
     Y_dev = Y_dev.astype("float32")
 
-    train_steps = max(X_train.shape[0] // batch_size, 1)
-    val_steps = max(X_dev.shape[0] // batch_size, 1)
+    batch_size = min(batch_size, X_train.shape[0], X_dev.shape[0])
+    train_steps = math.ceil(X_train.shape[0] / batch_size)
+    val_steps = math.ceil(X_dev.shape[0] / batch_size)
     train_ds = (tf.data.Dataset.from_tensor_slices((X_train, Y_train))
                 .shuffle(min(len(X_train), 10000), reshuffle_each_iteration=True)
-                .batch(batch_size, drop_remainder=True)
+                .batch(batch_size, drop_remainder=False)
                 .repeat()
                 .prefetch(tf.data.AUTOTUNE))
 
     val_ds = (tf.data.Dataset.from_tensor_slices((X_dev, Y_dev))
-              .batch(batch_size, drop_remainder=True)
+              .batch(batch_size, drop_remainder=False)
               .repeat()
               .prefetch(tf.data.AUTOTUNE))
 

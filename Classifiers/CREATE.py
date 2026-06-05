@@ -28,6 +28,7 @@ from tensorflow.keras.utils import to_categorical
 
 import time
 import joblib
+import math
 
 # ====================
 # CONFIGURACIÓN GPU
@@ -194,15 +195,17 @@ def run_experiment(model, X_oh_train, X_oh_test, X_kmer_train, X_kmer_test, y_tr
     X_oh_train, X_kmer_train, y_train = shuffle(X_oh_train, X_kmer_train, y_train)
     X_oh_test, X_kmer_test, y_test = shuffle(X_oh_test, X_kmer_test, y_test)
 
-    train_steps = max(X_oh_train.shape[0] // batch_size, 1)
-    val_steps = max(X_oh_test.shape[0] // batch_size, 1)
+    batch_size = min(batch_size, X_oh_train.shape[0], X_oh_test.shape[0])
+    train_steps = math.ceil(X_oh_train.shape[0] / batch_size)
+    val_steps = math.ceil(X_oh_test.shape[0] / batch_size)
+
     train_ds = (tf.data.Dataset.from_tensor_slices(((X_kmer_train, X_oh_train), y_train))
                 .shuffle(min(len(X_oh_train), 10000), reshuffle_each_iteration=True)
-                .batch(batch_size, drop_remainder=True)
+                .batch(batch_size, drop_remainder=False)
                 .repeat()
                 .prefetch(tf.data.AUTOTUNE))
     val_ds = (tf.data.Dataset.from_tensor_slices(((X_kmer_test, X_oh_test), y_test))
-              .batch(batch_size, drop_remainder=True)
+              .batch(batch_size, drop_remainder=False)
               .repeat()
               .prefetch(tf.data.AUTOTUNE))
 

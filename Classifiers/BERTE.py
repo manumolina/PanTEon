@@ -254,16 +254,18 @@ def run_experiment(model, X_train, Y_train, X_dev, Y_dev, batch_size, num_epochs
 	X_dev = [X.astype("float32") for X in X_dev]
 	Y_dev = tf.cast(Y_dev, tf.float32)
 
-	train_steps = max(X_train[0].shape[0] // batch_size, 1)
-	val_steps = max(X_dev[0].shape[0] // batch_size, 1)
+	batch_size = min(batch_size, X_train[0].shape[0], X_dev[0].shape[0])
+	train_steps = math.ceil(X_train[0].shape[0] / batch_size)
+	val_steps = math.ceil(X_dev[0].shape[0] / batch_size)
+
 	train_ds = (tf.data.Dataset.from_tensor_slices(((X_train[0], X_train[1], X_train[2]), Y_train))
 				.shuffle(min(len(X_train[0]), 10000), reshuffle_each_iteration=True)
-				.batch(batch_size, drop_remainder=True)
+				.batch(batch_size, drop_remainder=False)
 				.repeat()
 				.prefetch(tf.data.AUTOTUNE))
 
 	val_ds = (tf.data.Dataset.from_tensor_slices(((X_dev[0], X_dev[1], X_dev[2]), Y_dev))
-			  .batch(batch_size, drop_remainder=True)
+			  .batch(batch_size, drop_remainder=False)
 			  .repeat()
 			  .prefetch(tf.data.AUTOTUNE))
 
