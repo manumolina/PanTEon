@@ -91,10 +91,15 @@ We highly recommend to use and install Python packages within an Anaconda enviro
 ```
 git clone https://github.com/simonorozcoarias/PanTEon.git
 ```
-Go to the PanTEon folder and find the file named "PanTEon_env.yml". Then, install the environment: 
+Go to the PanTEon folder and find the file named "PanTEon_env.yml". Then, install the environment (for GPU users): 
 ```
 cd PanTEon
 conda env create -f PanTEon_env.yml
+```
+If you are interested in using PanTEon with CPU only (no recommended for training), install the environment as follosing: 
+```
+cd PanTEon
+conda env create -f PanTEon_env_cpu.yml
 ```
 Alternatively, if you prefer install conda package in batches (to limit the RAM usage and time), you can do that in the following way:
 
@@ -174,7 +179,11 @@ After successfully installing PanTEon_env, you can test it using the testing dat
 ```
 conda activate PanTEon_env
 ```
-Sometimes, you will need to update some environment variables to point to the correct paths inside the conda environment:
+or for CPU users:
+```
+conda activate PanTEon_env_cpu
+```
+In some cases, you will need to update some environment variables to point to the correct paths inside the conda environment (do this only one time per session):
 ```
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 ```
