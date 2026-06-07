@@ -1,0 +1,3 @@
+# Optional: local/CI install. For Docker-only workflow use scripts/pre-commit.sh instead.
+pre-commit>=4.0.0
+ruff>=0.15.0
