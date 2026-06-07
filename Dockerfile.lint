@@ -1,0 +1,9 @@
+FROM python:3.10-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir pre-commit==4.2.0 \
+    && git config --global --add safe.directory /repo
+
+WORKDIR /repo
+ENTRYPOINT ["pre-commit"]

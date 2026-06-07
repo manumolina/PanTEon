@@ -134,6 +134,14 @@ Inside the shell, PanTEon is available as:
 python PanTEon.py inference -h
 ```
 
+## Code quality checks
+
+Linting and formatting run in a separate lightweight container — no local Python or conda required. See [development.md](development.md) for pre-commit and Ruff usage via Docker.
+
+```bash
+./scripts/pre-commit.sh run --all-files
+```
+
 ## Notes
 
 - **CPU only**: this image is optimized for size and runs on CPU. Training large models will be slow; GPU support is not included.
