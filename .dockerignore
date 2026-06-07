@@ -1,0 +1,13 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+**/desktop.ini
+bench_scripts/
+*.md
+LICENSE
+Figures/
+Dockerfile*
+.dockerignore
+PanTEon_env*.yml
